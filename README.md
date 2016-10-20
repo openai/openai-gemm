@@ -1,9 +1,9 @@
 # openai-gemm
-Open single and half precision gemm implementations
+Open single and half precision gemm implementations.  The main speedups over cublas are with small minibatch and in fp16 data formats.
 
 ## Quick Install
 
-The demonstration code currently depends on Nervana neon:
+The demonstration code currently depends on [Nervana neon](https://github.com/NervanaSystems/neon):
 
     git clone git@github.com:NervanaSystems/neon.git
     cd neon
