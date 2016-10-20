@@ -1,8 +1,29 @@
 # openai-gemm
 Open single and half precision gemm implementations
 
+## Quick Install
 
-### TITAN X (Pascal)
+The demonstration code currently depends on Nervana neon:
+
+    git clone git@github.com:NervanaSystems/neon.git
+    cd neon
+    make
+    . .venv/bin/activate
+
+Clone and run this repo:
+
+    git clone git@github.com:openai/openai-gemm.git
+
+    Run the benchmark:
+    ./benchmark.py
+
+    Run the unit test:
+    ./test.py
+
+
+### DeepBench on Pascal TITAN X
+( https://github.com/baidu-research/DeepBench )
+
 
 |     M|     N|     K| Op|OpenAI_32|cuBLAS_32|ratio_32|OpenAI_16|cuBLAS_16|ratio_16|
 |------|------|------|---|---------|---------|--------|---------|---------|--------|

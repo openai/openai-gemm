@@ -99,8 +99,8 @@ config = (
     # (  896,  896,   32, True , False),
 )
 
-print "|     M|     N|     K|Op|OpenAI_32|cuBLAS_32|ratio_32|OpenAI_16|cuBLAS_16|ratio_16|"
-print "|------|------|------|--|---------|---------|--------|---------|---------|--------|"
+print "|     M|     N|     K| Op|OpenAI_32|cuBLAS_32|ratio_32|OpenAI_16|cuBLAS_16|ratio_16|"
+print "|------|------|------|---|---------|---------|--------|---------|---------|--------|"
 
 for m, n, k, at, bt in config:
 
@@ -138,4 +138,4 @@ for m, n, k, at, bt in config:
         dtype_data.append(text)
 
 
-    print "|%6d|%6d|%6d|%s|%s|" % (m, n, k, op, "|".join(dtype_data))
+    print "|%6d|%6d|%6d|%3s|%s|" % (m, n, k, op, "|".join(dtype_data))
