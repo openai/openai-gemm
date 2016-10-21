@@ -537,7 +537,7 @@ def get_ptx_file(kernel_spec, kernel_name, arch, ptx_ver):
         share = ""
 
     kernel_text = _kernel_template.format(arch, kernel_name, kernel_params, thread_spec, share, args_spec, ptx_ver)
-    kernel_ptx  = os.path.join(ptx_dir, kernel_name + "_" + arch + ".ptx")
+    kernel_ptx  = os.path.join(ptx_dir, kernel_name + ".ptx")
 
     current_text = ""
     if os.path.exists(kernel_ptx):
@@ -588,18 +588,20 @@ def get_kernel(base_name, options=None):
 
     arch = "sm_%d%d" % (major, minor)
 
-    libprefix = "PERL5LIB=%s" % (maxas_dir)
+    libprefix = "PERL5LIB=%s" % maxas_dir
     maxas_i = [libprefix, os.path.join(maxas_dir, "maxas.pl") + " -i -w"]
     maxas_p = [libprefix, os.path.join(maxas_dir, "maxas.pl") + " -p"]
 
     kernel_spec = kernels[base_name]
     kernel_name = base_name
 
+    # static options
     if "args" in kernel_spec:
         for pair in kernel_spec["args"].items():
             maxas_i.append("-D%s %s" % pair)
             maxas_p.append("-D%s %s" % pair)
 
+    # dynamic options
     if options is not None:
         for opt in options:
             if type(opt) is tuple:
@@ -628,18 +630,23 @@ def get_kernel(base_name, options=None):
     ptx_mtime   = os.path.getmtime(ptx_file)
     cubin_mtime = os.path.getmtime(cubin_file) if os.path.exists(cubin_file) else 0
 
+    build_cubin = False
     if ptx_mtime > cubin_mtime:
-        run_command([ "ptxas -v -arch", arch, "-o", cubin_file, ptx_file ])
-        cubin_mtime = 0
+        build_cubin = True
 
     includes = extract_includes(sass_name)
-
     for include, include_mtime in includes:
         if include_mtime > cubin_mtime:
-            run_command(maxas_i + [sass_file, cubin_file])
-            cubin_mtime = time.time()
+            build_cubin = True
             break
 
+    if build_cubin:
+        # build the cubin and run maxas in the same command
+        # we don't want the chance of a generated cubin not processed by maxas (in case user hits ^C in between these steps)
+        run_command([ "ptxas -v -arch", arch, "-o", cubin_file, ptx_file, ";" ] + maxas_i + [sass_file, cubin_file])
+        cubin_mtime = time.time()
+
+    # output preprocessed and disassembled versions in debug mode
     if debug:
         pre_dir  = _get_cache_dir([arch, 'pre'])
         dump_dir = _get_cache_dir([arch, 'dump'])
@@ -657,6 +664,7 @@ def get_kernel(base_name, options=None):
         if cubin_mtime > dump_mtime:
             run_command(["nvdisasm -c", cubin_file, ">", dump_file])
 
+    # generate the function signature for pycuda
     params  = _params[kernel_spec["params"]]
     sig = ""
     for p in params:
