@@ -12,6 +12,14 @@ print drv.Context.get_current().get_device().name()
 ones = 0
 out  = 0
 
+# for i in range(1000): # np.float32, np.float16
+
+#     matmul_test(ng, np.float32, "TN", 4096*4, 4096*4, 33, ones=ones, out=out) # update
+
+#     if i % 100 == 0: print i
+
+# exit()
+
 small_1  = (1,2,3,4,5,6,7,8,9,16,32,64,65,72,120,127,128,192)
 medium_1 = (32,64,128,192,778,785,786,787,794)
 big_1    = (32,64,128,1532,1535,1536,1537,1540,3073,4095)

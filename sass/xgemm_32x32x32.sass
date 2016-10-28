@@ -1,25 +1,45 @@
 # Kernel: xgemm_32x32x32
 
 [-
-our $type;
-sub fp16 { return $type eq 'h' }
-our $dtype  = fp16() ?  'U16' :  '32';
-our $dshift = fp16() ?    '1' :   '2';
-our $dsize  = fp16() ?    '2' :   '4';
-our $vsize  = fp16() ?   '64' : '128';
-sub dtype  { return $dtype;  }
-sub dsize  { return $dsize;  }
-sub dshift { return $dshift; }
+our ($type, $A16, $B16, $C16);
+sub A16 { return $type eq 'h' || $A16 }
+sub B16 { return $type eq 'h' || $B16 }
+sub C16 { return $type eq 'h' || $C16 }
+
+our $dtypeA  = A16() ?  'U16' :  '32';
+our $dtypeB  = B16() ?  'U16' :  '32';
+our $dtypeC  = C16() ?  'U16' :  '32';
+
+our $dshiftA = A16() ?    '1' :   '2';
+our $dshiftB = B16() ?    '1' :   '2';
+our $dshiftC = C16() ?    '1' :   '2';
+
+our $dsizeA  = A16() ?    '2' :   '4';
+our $dsizeB  = B16() ?    '2' :   '4';
+our $dsizeC  = C16() ?    '2' :   '4';
+
+our $vsizeA  = A16() ?   '64' : '128';
+our $vsizeB  = B16() ?   '64' : '128';
+our $vsizeC  = C16() ?   '64' : '128';
+
+sub dtypeA  { return $dtypeA;  }
+sub dtypeB  { return $dtypeB;  }
+sub dtypeC  { return $dtypeC;  }
+
+sub dsizeA  { return $dsizeA;  }
+sub dsizeB  { return $dsizeB;  }
+sub dsizeC  { return $dsizeC;  }
+
+sub dshiftA { return $dshiftA; }
+sub dshiftB { return $dshiftB; }
+sub dshiftC { return $dshiftC; }
 
 our ($outerContigA, $outerContigB, $NN, $NT, $TN, $TT);
-if    ($NN)
-    { $outerContigA = 0; $outerContigB = 1 }
-elsif ($NT)
-    { $outerContigA = 0; $outerContigB = 0 }
-elsif ($TN)
-    { $outerContigA = 1; $outerContigB = 1 }
-elsif ($TT)
-    { $outerContigA = 1; $outerContigB = 0 }
+if    ($NN) { $outerContigA = 0; $outerContigB = 1 }
+elsif ($NT) { $outerContigA = 0; $outerContigB = 0 }
+elsif ($TN) { $outerContigA = 1; $outerContigB = 1 }
+elsif ($TT) { $outerContigA = 1; $outerContigB = 0 }
+
 sub outerContigA  { return $outerContigA; }
 sub outerContigB  { return $outerContigB; }
 
@@ -121,7 +141,7 @@ sub vecB  { return $vecB || $vec; }
 [+ join '', map sprintf("--:-:-:-:1      LDS.U.128 czero%02d, [addr_zero];\n", $_ * 4), 0..15; +]
 
 [+
-    our $dshift;
+    our $dshiftA;
     my $predsA = vecA() ? q{
 --:-:-:-:1      P2R predsA, PR, RZ, 0x08;
 
@@ -146,7 +166,7 @@ sub vecB  { return $vecB || $vec; }
 // trackA += (idx_A*32 + tidAX + cda*tidAY) * dsize
 --:-:-:-:1      ISCADD txa0, idx_A, tidAX, 5;
 --:-:-:-:1      XMAD.LO2 ta0, cda,  tidAY, txa0;
---:-:-:-:1      SHL cda32,  cda, 1x<$dshift + 5>;
+--:-:-:-:1      SHL cda32,  cda, 1x<$dshiftA + 5>;
 
 --:-:-:-:1      ISETP.LT.AND P3, PT, txa0, param_m, PT;$predsA
 
@@ -182,13 +202,13 @@ sub vecB  { return $vecB || $vec; }
     };
 +]
 --:-:-:-:1      ISCADD   ta1, cda,    ta0, 4;
---:-:-:-:1      LEA      track0A0.CC, ta0, param_A[0],     [+ dshift() +];
---:-:-:-:1      LEA.HI.X track0A1,    ta0, param_A[1], RZ, [+ dshift() +];
---:-:-:-:1      LEA      track1A0.CC, ta1, param_A[0],     [+ dshift() +];
---:-:-:-:1      LEA.HI.X track1A1,    ta1, param_A[1], RZ, [+ dshift() +];
+--:-:-:-:1      LEA      track0A0.CC, ta0, param_A[0],     [+ dshiftA() +];
+--:-:-:-:1      LEA.HI.X track0A1,    ta0, param_A[1], RZ, [+ dshiftA() +];
+--:-:-:-:1      LEA      track1A0.CC, ta1, param_A[0],     [+ dshiftA() +];
+--:-:-:-:1      LEA.HI.X track1A1,    ta1, param_A[1], RZ, [+ dshiftA() +];
 
 [+
-    our $dshift;
+    our $dshiftB;
     my $predsB = vecB() ? q{
 --:-:-:-:1      P2R predsB, PR, RZ, 0x08;
 
@@ -216,7 +236,7 @@ sub vecB  { return $vecB || $vec; }
 
 --:-:-:-:1      ISETP.LT.AND P3, PT, txb0, param_n, PT;$predsB
 
---:-:-:-:1      SHL cdb32, cdb, 1x<$dshift + 5>;
+--:-:-:-:1      SHL cdb32, cdb, 1x<$dshiftB + 5>;
 
 // writeBs = (tidBY*32 + tidBX) * 4
 --:-:-:-:1      ISCADD writeBs, tidBY, tidBX, 5;
@@ -250,10 +270,10 @@ sub vecB  { return $vecB || $vec; }
     };
 +]
 --:-:-:-:1      ISCADD   tb1, cdb,    tb0, 4;
---:-:-:-:1      LEA      track0B0.CC, tb0, param_B[0],     [+ dshift() +];
---:-:-:-:1      LEA.HI.X track0B1,    tb0, param_B[1], RZ, [+ dshift() +];
---:-:-:-:1      LEA      track1B0.CC, tb1, param_B[0],     [+ dshift() +];
---:-:-:-:1      LEA.HI.X track1B1,    tb1, param_B[1], RZ, [+ dshift() +];
+--:-:-:-:1      LEA      track0B0.CC, tb0, param_B[0],     [+ dshiftB() +];
+--:-:-:-:1      LEA.HI.X track0B1,    tb0, param_B[1], RZ, [+ dshiftB() +];
+--:-:-:-:1      LEA      track1B0.CC, tb1, param_B[0],     [+ dshiftB() +];
+--:-:-:-:1      LEA.HI.X track1B1,    tb1, param_B[1], RZ, [+ dshiftB() +];
 
 // readAs = ((tid & 8) >> 2) | (tid & 1)
 01:-:-:-:1      LOP.AND tid1,   tid,    1;
@@ -310,7 +330,7 @@ sub vecB  { return $vecB || $vec; }
 
 <SCHEDULE_BLOCK>
 [+
-    our ($dsize, $vsize, $dtype);
+    our ($dsizeA, $vsizeA, $dtypeA);
     return
         outerContigA() ?
             vecA() ? qq{
@@ -320,11 +340,11 @@ sub vecB  { return $vecB || $vec; }
 --:-:-:-:1      ISETP.LT.AND P0, PT, tidAY,   partialK, P3;
 --:-:-:-:1      ISETP.LT.AND P1, PT, tidAY16, partialK, P3;
 
---:-:2:-:1  \@P0 LDG.E.CI.$vsize load0A, [track0A];
---:-:2:-:1 \@!P0 LDS.U.$vsize    load0A, [addr_zero];
+--:-:2:-:1  \@P0 LDG.E.CI.$vsizeA load0A, [track0A];
+--:-:2:-:1 \@!P0 LDS.U.$vsizeA    load0A, [addr_zero];
 
---:-:3:-:1  \@P1 LDG.E.CI.$vsize load1A, [track1A];
---:-:3:-:1 \@!P1 LDS.U.$vsize    load1A, [addr_zero];
+--:-:3:-:1  \@P1 LDG.E.CI.$vsizeA load1A, [track1A];
+--:-:3:-:1 \@!P1 LDS.U.$vsizeA    load1A, [addr_zero];
 
                 } : qq{
 
@@ -333,10 +353,10 @@ sub vecB  { return $vecB || $vec; }
 --:-:-:-:1  \@P0 R2P PR, predsA, 0x78;
 --:-:-:-:1 \@!P0 R2P PR, RZ,     0x78;
 
---:-:-:-:1  \@P3 LDG.E.CI.$dtype load0A0, [track0A + ${dsize}x<0>];
---:-:-:-:1  \@P4 LDG.E.CI.$dtype load0A1, [track0A + ${dsize}x<1>];
---:-:-:-:1  \@P5 LDG.E.CI.$dtype load0A2, [track0A + ${dsize}x<2>];
---:-:2:-:1  \@P6 LDG.E.CI.$dtype load0A3, [track0A + ${dsize}x<3>];
+--:-:-:-:1  \@P3 LDG.E.CI.$dtypeA load0A0, [track0A + ${dsizeA}x<0>];
+--:-:-:-:1  \@P4 LDG.E.CI.$dtypeA load0A1, [track0A + ${dsizeA}x<1>];
+--:-:-:-:1  \@P5 LDG.E.CI.$dtypeA load0A2, [track0A + ${dsizeA}x<2>];
+--:-:2:-:1  \@P6 LDG.E.CI.$dtypeA load0A3, [track0A + ${dsizeA}x<3>];
 --:-:-:-:1 \@!P3 MOV load0A0, RZ;
 --:-:-:-:1 \@!P4 MOV load0A1, RZ;
 --:-:-:-:1 \@!P5 MOV load0A2, RZ;
@@ -345,10 +365,10 @@ sub vecB  { return $vecB || $vec; }
 --:-:-:-:1  \@P1 R2P PR, predsA, 0x78;
 --:-:-:-:1 \@!P1 R2P PR, RZ,     0x78;
 
---:-:-:-:1  \@P3 LDG.E.CI.$dtype load1A0, [track1A + ${dsize}x<0>];
---:-:-:-:1  \@P4 LDG.E.CI.$dtype load1A1, [track1A + ${dsize}x<1>];
---:-:-:-:1  \@P5 LDG.E.CI.$dtype load1A2, [track1A + ${dsize}x<2>];
---:-:3:-:1  \@P6 LDG.E.CI.$dtype load1A3, [track1A + ${dsize}x<3>];
+--:-:-:-:1  \@P3 LDG.E.CI.$dtypeA load1A0, [track1A + ${dsizeA}x<0>];
+--:-:-:-:1  \@P4 LDG.E.CI.$dtypeA load1A1, [track1A + ${dsizeA}x<1>];
+--:-:-:-:1  \@P5 LDG.E.CI.$dtypeA load1A2, [track1A + ${dsizeA}x<2>];
+--:-:3:-:1  \@P6 LDG.E.CI.$dtypeA load1A3, [track1A + ${dsizeA}x<3>];
 --:-:-:-:1 \@!P3 MOV load1A0, RZ;
 --:-:-:-:1 \@!P4 MOV load1A1, RZ;
 --:-:-:-:1 \@!P5 MOV load1A2, RZ;
@@ -364,11 +384,11 @@ sub vecB  { return $vecB || $vec; }
 --:-:-:-:1      ISETP.LT.AND P0, PT, tidAY, partialK, P5;
 --:-:-:-:1      ISETP.LT.AND P1, PT, tidAY, partialK, P6;
 
---:-:2:-:1  \@P0 LDG.E.CI.$vsize load0A, [track0A];
---:-:2:-:1 \@!P0 LDS.U.$vsize    load0A, [addr_zero];
+--:-:2:-:1  \@P0 LDG.E.CI.$vsizeA load0A, [track0A];
+--:-:2:-:1 \@!P0 LDS.U.$vsizeA    load0A, [addr_zero];
 
---:-:3:-:1  \@P1 LDG.E.CI.$vsize load1A, [track1A];
---:-:3:-:1 \@!P1 LDS.U.$vsize    load1A, [addr_zero];
+--:-:3:-:1  \@P1 LDG.E.CI.$vsizeA load1A, [track1A];
+--:-:3:-:1 \@!P1 LDS.U.$vsizeA    load1A, [addr_zero];
 
                 } : qq{
 
@@ -381,10 +401,10 @@ sub vecB  { return $vecB || $vec; }
 --:-:-:-:1      ISETP.LT.AND P1, PT, tidAY1, partialK, P5;
 --:-:-:-:1      ISETP.LT.AND P2, PT, tidAY2, partialK, P5;
 --:-:-:-:1      ISETP.LT.AND P3, PT, tidAY3, partialK, P5;
---:-:-:-:1  \@P0 LDG.E.CI.$dtype load0A0, [track0A + ${dsize}x<0>];
---:-:-:-:1  \@P1 LDG.E.CI.$dtype load0A1, [track0A + ${dsize}x<1>];
---:-:-:-:1  \@P2 LDG.E.CI.$dtype load0A2, [track0A + ${dsize}x<2>];
---:-:2:-:1  \@P3 LDG.E.CI.$dtype load0A3, [track0A + ${dsize}x<3>];
+--:-:-:-:1  \@P0 LDG.E.CI.$dtypeA load0A0, [track0A + ${dsizeA}x<0>];
+--:-:-:-:1  \@P1 LDG.E.CI.$dtypeA load0A1, [track0A + ${dsizeA}x<1>];
+--:-:-:-:1  \@P2 LDG.E.CI.$dtypeA load0A2, [track0A + ${dsizeA}x<2>];
+--:-:2:-:1  \@P3 LDG.E.CI.$dtypeA load0A3, [track0A + ${dsizeA}x<3>];
 --:-:-:-:1 \@!P0 MOV load0A0, RZ;
 --:-:-:-:1 \@!P1 MOV load0A1, RZ;
 --:-:-:-:1 \@!P2 MOV load0A2, RZ;
@@ -394,10 +414,10 @@ sub vecB  { return $vecB || $vec; }
 --:-:-:-:1      ISETP.LT.AND P1, PT, tidAY1, partialK, P6;
 --:-:-:-:1      ISETP.LT.AND P2, PT, tidAY2, partialK, P6;
 --:-:-:-:1      ISETP.LT.AND P3, PT, tidAY3, partialK, P6;
---:-:-:-:1  \@P0 LDG.E.CI.$dtype load1A0, [track1A + ${dsize}x<0>];
---:-:-:-:1  \@P1 LDG.E.CI.$dtype load1A1, [track1A + ${dsize}x<1>];
---:-:-:-:1  \@P2 LDG.E.CI.$dtype load1A2, [track1A + ${dsize}x<2>];
---:-:3:-:1  \@P3 LDG.E.CI.$dtype load1A3, [track1A + ${dsize}x<3>];
+--:-:-:-:1  \@P0 LDG.E.CI.$dtypeA load1A0, [track1A + ${dsizeA}x<0>];
+--:-:-:-:1  \@P1 LDG.E.CI.$dtypeA load1A1, [track1A + ${dsizeA}x<1>];
+--:-:-:-:1  \@P2 LDG.E.CI.$dtypeA load1A2, [track1A + ${dsizeA}x<2>];
+--:-:3:-:1  \@P3 LDG.E.CI.$dtypeA load1A3, [track1A + ${dsizeA}x<3>];
 --:-:-:-:1 \@!P0 MOV load1A0, RZ;
 --:-:-:-:1 \@!P1 MOV load1A1, RZ;
 --:-:-:-:1 \@!P2 MOV load1A2, RZ;
@@ -407,7 +427,7 @@ sub vecB  { return $vecB || $vec; }
 +]
 
 [+
-    our ($dsize, $vsize, $dtype);
+    our ($dsizeB, $vsizeB, $dtypeB);
     return
         outerContigB() ?
             vecB() ? qq{
@@ -417,11 +437,11 @@ sub vecB  { return $vecB || $vec; }
 --:-:-:-:1      ISETP.LT.AND P0, PT, tidBY,   partialK, P3;
 --:-:-:-:1      ISETP.LT.AND P1, PT, tidBY16, partialK, P3;
 
---:-:5:-:1  \@P0 LDG.E.CI.$vsize load0B, [track0B];
---:-:5:-:1 \@!P0 LDS.U.$vsize    load0B, [addr_zero];
+--:-:5:-:1  \@P0 LDG.E.CI.$vsizeB load0B, [track0B];
+--:-:5:-:1 \@!P0 LDS.U.$vsizeB    load0B, [addr_zero];
 
---:-:6:-:1  \@P1 LDG.E.CI.$vsize load1B, [track1B];
---:-:6:-:1 \@!P1 LDS.U.$vsize    load1B, [addr_zero];
+--:-:6:-:1  \@P1 LDG.E.CI.$vsizeB load1B, [track1B];
+--:-:6:-:1 \@!P1 LDS.U.$vsizeB    load1B, [addr_zero];
 
                 } : qq{
 
@@ -430,10 +450,10 @@ sub vecB  { return $vecB || $vec; }
 --:-:-:-:1  \@P0 R2P PR, predsB, 0x78;
 --:-:-:-:1 \@!P0 R2P PR, RZ,     0x78;
 
---:-:-:-:1  \@P3 LDG.E.CI.$dtype load0B0, [track0B + ${dsize}x<0>];
---:-:-:-:1  \@P4 LDG.E.CI.$dtype load0B1, [track0B + ${dsize}x<1>];
---:-:-:-:1  \@P5 LDG.E.CI.$dtype load0B2, [track0B + ${dsize}x<2>];
---:-:5:-:1  \@P6 LDG.E.CI.$dtype load0B3, [track0B + ${dsize}x<3>];
+--:-:-:-:1  \@P3 LDG.E.CI.$dtypeB load0B0, [track0B + ${dsizeB}x<0>];
+--:-:-:-:1  \@P4 LDG.E.CI.$dtypeB load0B1, [track0B + ${dsizeB}x<1>];
+--:-:-:-:1  \@P5 LDG.E.CI.$dtypeB load0B2, [track0B + ${dsizeB}x<2>];
+--:-:5:-:1  \@P6 LDG.E.CI.$dtypeB load0B3, [track0B + ${dsizeB}x<3>];
 --:-:-:-:1 \@!P3 MOV load0B0, RZ;
 --:-:-:-:1 \@!P4 MOV load0B1, RZ;
 --:-:-:-:1 \@!P5 MOV load0B2, RZ;
@@ -442,10 +462,10 @@ sub vecB  { return $vecB || $vec; }
 --:-:-:-:1  \@P1 R2P PR, predsB, 0x78;
 --:-:-:-:1 \@!P1 R2P PR, RZ,     0x78;
 
---:-:-:-:1  \@P3 LDG.E.CI.$dtype load1B0, [track1B + ${dsize}x<0>];
---:-:-:-:1  \@P4 LDG.E.CI.$dtype load1B1, [track1B + ${dsize}x<1>];
---:-:-:-:1  \@P5 LDG.E.CI.$dtype load1B2, [track1B + ${dsize}x<2>];
---:-:6:-:1  \@P6 LDG.E.CI.$dtype load1B3, [track1B + ${dsize}x<3>];
+--:-:-:-:1  \@P3 LDG.E.CI.$dtypeB load1B0, [track1B + ${dsizeB}x<0>];
+--:-:-:-:1  \@P4 LDG.E.CI.$dtypeB load1B1, [track1B + ${dsizeB}x<1>];
+--:-:-:-:1  \@P5 LDG.E.CI.$dtypeB load1B2, [track1B + ${dsizeB}x<2>];
+--:-:6:-:1  \@P6 LDG.E.CI.$dtypeB load1B3, [track1B + ${dsizeB}x<3>];
 --:-:-:-:1 \@!P3 MOV load1B0, RZ;
 --:-:-:-:1 \@!P4 MOV load1B1, RZ;
 --:-:-:-:1 \@!P5 MOV load1B2, RZ;
@@ -461,11 +481,11 @@ sub vecB  { return $vecB || $vec; }
 --:-:-:-:1      ISETP.LT.AND P0, PT, tidBY, partialK, P5;
 --:-:-:-:1      ISETP.LT.AND P1, PT, tidBY, partialK, P6;
 
---:-:5:-:1  \@P0 LDG.E.CI.$vsize load0B, [track0B];
---:-:5:-:1 \@!P0 LDS.U.$vsize    load0B, [addr_zero];
+--:-:5:-:1  \@P0 LDG.E.CI.$vsizeB load0B, [track0B];
+--:-:5:-:1 \@!P0 LDS.U.$vsizeB    load0B, [addr_zero];
 
---:-:6:-:1  \@P1 LDG.E.CI.$vsize load1B, [track1B];
---:-:6:-:1 \@!P1 LDS.U.$vsize    load1B, [addr_zero];
+--:-:6:-:1  \@P1 LDG.E.CI.$vsizeB load1B, [track1B];
+--:-:6:-:1 \@!P1 LDS.U.$vsizeB    load1B, [addr_zero];
 
                 } : qq{
 
@@ -478,10 +498,10 @@ sub vecB  { return $vecB || $vec; }
 --:-:-:-:1      ISETP.LT.AND P1, PT, tidBY1, partialK, P5;
 --:-:-:-:1      ISETP.LT.AND P2, PT, tidBY2, partialK, P5;
 --:-:-:-:1      ISETP.LT.AND P3, PT, tidBY3, partialK, P5;
---:-:-:-:1  \@P0 LDG.E.CI.$dtype load0B0, [track0B + ${dsize}x<0>];
---:-:-:-:1  \@P1 LDG.E.CI.$dtype load0B1, [track0B + ${dsize}x<1>];
---:-:-:-:1  \@P2 LDG.E.CI.$dtype load0B2, [track0B + ${dsize}x<2>];
---:-:5:-:1  \@P3 LDG.E.CI.$dtype load0B3, [track0B + ${dsize}x<3>];
+--:-:-:-:1  \@P0 LDG.E.CI.$dtypeB load0B0, [track0B + ${dsizeB}x<0>];
+--:-:-:-:1  \@P1 LDG.E.CI.$dtypeB load0B1, [track0B + ${dsizeB}x<1>];
+--:-:-:-:1  \@P2 LDG.E.CI.$dtypeB load0B2, [track0B + ${dsizeB}x<2>];
+--:-:5:-:1  \@P3 LDG.E.CI.$dtypeB load0B3, [track0B + ${dsizeB}x<3>];
 --:-:-:-:1 \@!P0 MOV load0B0, RZ;
 --:-:-:-:1 \@!P1 MOV load0B1, RZ;
 --:-:-:-:1 \@!P2 MOV load0B2, RZ;
@@ -491,10 +511,10 @@ sub vecB  { return $vecB || $vec; }
 --:-:-:-:1      ISETP.LT.AND P1, PT, tidBY1, partialK, P6;
 --:-:-:-:1      ISETP.LT.AND P2, PT, tidBY2, partialK, P6;
 --:-:-:-:1      ISETP.LT.AND P3, PT, tidBY3, partialK, P6;
---:-:-:-:1  \@P0 LDG.E.CI.$dtype load1B0, [track1B + ${dsize}x<0>];
---:-:-:-:1  \@P1 LDG.E.CI.$dtype load1B1, [track1B + ${dsize}x<1>];
---:-:-:-:1  \@P2 LDG.E.CI.$dtype load1B2, [track1B + ${dsize}x<2>];
---:-:6:-:1  \@P3 LDG.E.CI.$dtype load1B3, [track1B + ${dsize}x<3>];
+--:-:-:-:1  \@P0 LDG.E.CI.$dtypeB load1B0, [track1B + ${dsizeB}x<0>];
+--:-:-:-:1  \@P1 LDG.E.CI.$dtypeB load1B1, [track1B + ${dsizeB}x<1>];
+--:-:-:-:1  \@P2 LDG.E.CI.$dtypeB load1B2, [track1B + ${dsizeB}x<2>];
+--:-:6:-:1  \@P3 LDG.E.CI.$dtypeB load1B3, [track1B + ${dsizeB}x<3>];
 --:-:-:-:1 \@!P0 MOV load1B0, RZ;
 --:-:-:-:1 \@!P1 MOV load1B1, RZ;
 --:-:-:-:1 \@!P2 MOV load1B2, RZ;
@@ -508,7 +528,7 @@ sub vecB  { return $vecB || $vec; }
 --:-:-:-:0      IADD k, k, -32;
 
 [+
-    return fp16() ?
+    return A16() ?
         vecA() ? q{
 02:-:-:-:1      F2F.F32.F16 load0A3, load0A1.H1;
 --:-:-:-:1      F2F.F32.F16 load0A2, load0A1.H0;
@@ -533,17 +553,17 @@ sub vecB  { return $vecB || $vec; }
     : '';
 +]
 [+
-    our $dshift;
+    our $dshiftA;
     return outerContigA() ? qq{
 
 02:-:-:-:1      STS.128 [writeAs + 4x<00*32>], load0A;
 
---:-:-:-:6      LEA    track0A0.CC, partialA, track0A0, $dshift;
+--:-:-:-:6      LEA    track0A0.CC, partialA, track0A0, $dshiftA;
 --:-:-:-:0      IADD.X track0A1, track0A1, RZ;
 
 04:-:-:-:1      STS.128 [writeAs + 4x<16*32>], load1A;
 
---:-:-:-:6      LEA    track1A0.CC, partialA, track1A0, $dshift;
+--:-:-:-:6      LEA    track1A0.CC, partialA, track1A0, $dshiftA;
 --:-:-:-:0      IADD.X track1A1, track1A1, RZ;
 
     } : qq{
@@ -552,7 +572,7 @@ sub vecB  { return $vecB || $vec; }
 --:-:-:-:1      STS [writeAs + 4x<1*32 + 0*16>], load0A1;
 --:-:-:-:1      STS [writeAs + 4x<0*32 + 0*16>], load0A0;
 
---:-:-:-:6      LEA    track0A0.CC, partialK, track0A0, $dshift;
+--:-:-:-:6      LEA    track0A0.CC, partialK, track0A0, $dshiftA;
 --:-:-:-:0      IADD.X track0A1, track0A1, RZ;
 
 04:-:-:-:1      STS [writeAs + 4x<3*32 + 1*16>], load1A3;
@@ -560,13 +580,13 @@ sub vecB  { return $vecB || $vec; }
 --:-:-:-:1      STS [writeAs + 4x<1*32 + 1*16>], load1A1;
 --:-:-:-:1      STS [writeAs + 4x<0*32 + 1*16>], load1A0;
 
---:-:-:-:6      LEA    track1A0.CC, partialK, track1A0, $dshift;
+--:-:-:-:6      LEA    track1A0.CC, partialK, track1A0, $dshiftA;
 --:-:-:-:0      IADD.X track1A1, track1A1, RZ;
     };
 +]
 
 [+
-    return fp16() ?
+    return B16() ?
         vecB() ? q{
 10:-:-:-:1      F2F.F32.F16 load0B3, load0B1.H1;
 --:-:-:-:1      F2F.F32.F16 load0B2, load0B1.H0;
@@ -591,17 +611,17 @@ sub vecB  { return $vecB || $vec; }
     : '';
 +]
 [+
-    our $dshift;
+    our $dshiftB;
     return outerContigB() ? qq{
 
 10:-:-:-:1      STS.128 [writeBs + 4x<00*32>], load0B;
 
---:-:-:-:6      LEA    track0B0.CC, partialB, track0B0, $dshift;
+--:-:-:-:6      LEA    track0B0.CC, partialB, track0B0, $dshiftB;
 --:-:-:-:0      IADD.X track0B1, track0B1, RZ;
 
 20:-:-:-:1      STS.128 [writeBs + 4x<16*32>], load1B;
 
---:-:-:-:6      LEA    track1B0.CC, partialB, track1B0, $dshift;
+--:-:-:-:6      LEA    track1B0.CC, partialB, track1B0, $dshiftB;
 --:-:-:-:0      IADD.X track1B1, track1B1, RZ;
 
     } : qq{
@@ -610,7 +630,7 @@ sub vecB  { return $vecB || $vec; }
 --:-:-:-:1      STS [writeBs + 4x<1*32 + 0*16>], load0B1;
 --:-:-:-:1      STS [writeBs + 4x<0*32 + 0*16>], load0B0;
 
---:-:-:-:6      LEA    track0B0.CC, partialK, track0B0, $dshift;
+--:-:-:-:6      LEA    track0B0.CC, partialK, track0B0, $dshiftB;
 --:-:-:-:0      IADD.X track0B1, track0B1, RZ;
 
 20:-:-:-:1      STS [writeBs + 4x<3*32 + 1*16>], load1B3;
@@ -618,7 +638,7 @@ sub vecB  { return $vecB || $vec; }
 --:-:-:-:1      STS [writeBs + 4x<1*32 + 1*16>], load1B1;
 --:-:-:-:1      STS [writeBs + 4x<0*32 + 1*16>], load1B0;
 
---:-:-:-:6      LEA    track1B0.CC, partialK, track1B0, $dshift;
+--:-:-:-:6      LEA    track1B0.CC, partialK, track1B0, $dshiftB;
 --:-:-:-:0      IADD.X track1B1, track1B1, RZ;
     };
 +]
@@ -635,29 +655,29 @@ sub vecB  { return $vecB || $vec; }
 --:-:1:-:1      LDS.U.128 j0Bx4, [readBs + 4x<0*32 + 16>];
 
 [+
-    our ($dsize, $vsize, $dtype);
+    our ($dsizeA, $vsizeA, $dtypeA);
     return
         outerContigA() ?
             vecA() ? qq{
 
 --:-:-:Y:d      ISETP.EQ.AND P3, PT, predsA, 0x08, P1;
 
---:-:2:-:1  \@P3 LDG.E.CI.$vsize load0A, [track0A];
---:-:3:-:1  \@P3 LDG.E.CI.$vsize load1A, [track1A];
+--:-:2:-:1  \@P3 LDG.E.CI.$vsizeA load0A, [track0A];
+--:-:3:-:1  \@P3 LDG.E.CI.$vsizeA load1A, [track1A];
 
                 } : qq{
 
 --:-:-:-:2  \@P1 R2P PR, predsA, 0x78;
 --:-:-:Y:d \@!P1 R2P PR, RZ,     0x78;
---:-:-:-:1  \@P3 LDG.E.CI.$dtype load0A0, [track0A + ${dsize}x<0>];
---:-:-:-:1  \@P4 LDG.E.CI.$dtype load0A1, [track0A + ${dsize}x<1>];
---:-:-:-:1  \@P5 LDG.E.CI.$dtype load0A2, [track0A + ${dsize}x<2>];
---:-:2:-:1  \@P6 LDG.E.CI.$dtype load0A3, [track0A + ${dsize}x<3>];
+--:-:-:-:1  \@P3 LDG.E.CI.$dtypeA load0A0, [track0A + ${dsizeA}x<0>];
+--:-:-:-:1  \@P4 LDG.E.CI.$dtypeA load0A1, [track0A + ${dsizeA}x<1>];
+--:-:-:-:1  \@P5 LDG.E.CI.$dtypeA load0A2, [track0A + ${dsizeA}x<2>];
+--:-:2:-:1  \@P6 LDG.E.CI.$dtypeA load0A3, [track0A + ${dsizeA}x<3>];
 
---:-:-:-:1  \@P3 LDG.E.CI.$dtype load1A0, [track1A + ${dsize}x<0>];
---:-:-:-:1  \@P4 LDG.E.CI.$dtype load1A1, [track1A + ${dsize}x<1>];
---:-:-:-:1  \@P5 LDG.E.CI.$dtype load1A2, [track1A + ${dsize}x<2>];
---:-:3:-:1  \@P6 LDG.E.CI.$dtype load1A3, [track1A + ${dsize}x<3>];
+--:-:-:-:1  \@P3 LDG.E.CI.$dtypeA load1A0, [track1A + ${dsizeA}x<0>];
+--:-:-:-:1  \@P4 LDG.E.CI.$dtypeA load1A1, [track1A + ${dsizeA}x<1>];
+--:-:-:-:1  \@P5 LDG.E.CI.$dtypeA load1A2, [track1A + ${dsizeA}x<2>];
+--:-:3:-:1  \@P6 LDG.E.CI.$dtypeA load1A3, [track1A + ${dsizeA}x<3>];
 
                 }
             :
@@ -665,49 +685,49 @@ sub vecB  { return $vecB || $vec; }
 
 --:-:-:-:2  \@P1 R2P PR, predsA, 0x60;
 --:-:-:Y:d \@!P1 R2P PR, RZ,     0x60;
---:-:2:-:1  \@P5 LDG.E.CI.$vsize load0A, [track0A];
---:-:3:-:1  \@P6 LDG.E.CI.$vsize load1A, [track1A];
+--:-:2:-:1  \@P5 LDG.E.CI.$vsizeA load0A, [track0A];
+--:-:3:-:1  \@P6 LDG.E.CI.$vsizeA load1A, [track1A];
 
                 } : qq{
 
 --:-:-:-:1  \@P1 R2P PR, predsA, 0x60;
 --:-:-:Y:d \@!P1 R2P PR, RZ,     0x60;
---:-:-:-:1  \@P5 LDG.E.CI.$dtype load0A0, [track0A + ${dsize}x<0>];
---:-:-:-:1  \@P5 LDG.E.CI.$dtype load0A1, [track0A + ${dsize}x<1>];
---:-:-:-:1  \@P5 LDG.E.CI.$dtype load0A2, [track0A + ${dsize}x<2>];
---:-:2:-:1  \@P5 LDG.E.CI.$dtype load0A3, [track0A + ${dsize}x<3>];
+--:-:-:-:1  \@P5 LDG.E.CI.$dtypeA load0A0, [track0A + ${dsizeA}x<0>];
+--:-:-:-:1  \@P5 LDG.E.CI.$dtypeA load0A1, [track0A + ${dsizeA}x<1>];
+--:-:-:-:1  \@P5 LDG.E.CI.$dtypeA load0A2, [track0A + ${dsizeA}x<2>];
+--:-:2:-:1  \@P5 LDG.E.CI.$dtypeA load0A3, [track0A + ${dsizeA}x<3>];
 
---:-:-:-:1  \@P6 LDG.E.CI.$dtype load1A0, [track1A + ${dsize}x<0>];
---:-:-:-:1  \@P6 LDG.E.CI.$dtype load1A1, [track1A + ${dsize}x<1>];
---:-:-:-:1  \@P6 LDG.E.CI.$dtype load1A2, [track1A + ${dsize}x<2>];
---:-:3:-:1  \@P6 LDG.E.CI.$dtype load1A3, [track1A + ${dsize}x<3>];
+--:-:-:-:1  \@P6 LDG.E.CI.$dtypeA load1A0, [track1A + ${dsizeA}x<0>];
+--:-:-:-:1  \@P6 LDG.E.CI.$dtypeA load1A1, [track1A + ${dsizeA}x<1>];
+--:-:-:-:1  \@P6 LDG.E.CI.$dtypeA load1A2, [track1A + ${dsizeA}x<2>];
+--:-:3:-:1  \@P6 LDG.E.CI.$dtypeA load1A3, [track1A + ${dsizeA}x<3>];
 
                 };
 +]
 [+
-    our ($dsize, $vsize, $dtype);
+    our ($dsizeB, $vsizeB, $dtypeB);
     return
         outerContigB() ?
             vecB() ? qq{
 
 --:-:-:Y:d      ISETP.EQ.AND P3, PT, predsB, 0x08, P1;
 
---:-:5:-:1  \@P3 LDG.E.CI.$vsize load0B, [track0B];
---:-:6:-:1  \@P3 LDG.E.CI.$vsize load1B, [track1B];
+--:-:5:-:1  \@P3 LDG.E.CI.$vsizeB load0B, [track0B];
+--:-:6:-:1  \@P3 LDG.E.CI.$vsizeB load1B, [track1B];
 
                 } : qq{
 
 --:-:-:-:2  \@P1 R2P PR, predsB, 0x78;
 --:-:-:Y:d \@!P1 R2P PR, RZ,     0x78;
---:-:-:-:1  \@P3 LDG.E.CI.$dtype load0B0, [track0B + ${dsize}x<0>];
---:-:-:-:1  \@P4 LDG.E.CI.$dtype load0B1, [track0B + ${dsize}x<1>];
---:-:-:-:1  \@P5 LDG.E.CI.$dtype load0B2, [track0B + ${dsize}x<2>];
---:-:5:-:1  \@P6 LDG.E.CI.$dtype load0B3, [track0B + ${dsize}x<3>];
+--:-:-:-:1  \@P3 LDG.E.CI.$dtypeB load0B0, [track0B + ${dsizeB}x<0>];
+--:-:-:-:1  \@P4 LDG.E.CI.$dtypeB load0B1, [track0B + ${dsizeB}x<1>];
+--:-:-:-:1  \@P5 LDG.E.CI.$dtypeB load0B2, [track0B + ${dsizeB}x<2>];
+--:-:5:-:1  \@P6 LDG.E.CI.$dtypeB load0B3, [track0B + ${dsizeB}x<3>];
 
---:-:-:-:1  \@P3 LDG.E.CI.$dtype load1B0, [track1B + ${dsize}x<0>];
---:-:-:-:1  \@P4 LDG.E.CI.$dtype load1B1, [track1B + ${dsize}x<1>];
---:-:-:-:1  \@P5 LDG.E.CI.$dtype load1B2, [track1B + ${dsize}x<2>];
---:-:6:-:1  \@P6 LDG.E.CI.$dtype load1B3, [track1B + ${dsize}x<3>];
+--:-:-:-:1  \@P3 LDG.E.CI.$dtypeB load1B0, [track1B + ${dsizeB}x<0>];
+--:-:-:-:1  \@P4 LDG.E.CI.$dtypeB load1B1, [track1B + ${dsizeB}x<1>];
+--:-:-:-:1  \@P5 LDG.E.CI.$dtypeB load1B2, [track1B + ${dsizeB}x<2>];
+--:-:6:-:1  \@P6 LDG.E.CI.$dtypeB load1B3, [track1B + ${dsizeB}x<3>];
 
                 }
             :
@@ -715,22 +735,22 @@ sub vecB  { return $vecB || $vec; }
 
 --:-:-:-:2  \@P1 R2P PR, predsB, 0x60;
 --:-:-:Y:d \@!P1 R2P PR, RZ,     0x60;
---:-:5:-:1  \@P5 LDG.E.CI.$vsize load0B, [track0B];
---:-:6:-:1  \@P6 LDG.E.CI.$vsize load1B, [track1B];
+--:-:5:-:1  \@P5 LDG.E.CI.$vsizeB load0B, [track0B];
+--:-:6:-:1  \@P6 LDG.E.CI.$vsizeB load1B, [track1B];
 
                 } : qq{
 
 --:-:-:-:2  \@P1 R2P PR, predsB, 0x60;
 --:-:-:Y:d \@!P1 R2P PR, RZ,     0x60;
---:-:-:-:1  \@P5 LDG.E.CI.$dtype load0B0, [track0B + ${dsize}x<0>];
---:-:-:-:1  \@P5 LDG.E.CI.$dtype load0B1, [track0B + ${dsize}x<1>];
---:-:-:-:1  \@P5 LDG.E.CI.$dtype load0B2, [track0B + ${dsize}x<2>];
---:-:5:-:1  \@P5 LDG.E.CI.$dtype load0B3, [track0B + ${dsize}x<3>];
+--:-:-:-:1  \@P5 LDG.E.CI.$dtypeB load0B0, [track0B + ${dsizeB}x<0>];
+--:-:-:-:1  \@P5 LDG.E.CI.$dtypeB load0B1, [track0B + ${dsizeB}x<1>];
+--:-:-:-:1  \@P5 LDG.E.CI.$dtypeB load0B2, [track0B + ${dsizeB}x<2>];
+--:-:5:-:1  \@P5 LDG.E.CI.$dtypeB load0B3, [track0B + ${dsizeB}x<3>];
 
---:-:-:-:1  \@P6 LDG.E.CI.$dtype load1B0, [track1B + ${dsize}x<0>];
---:-:-:-:1  \@P6 LDG.E.CI.$dtype load1B1, [track1B + ${dsize}x<1>];
---:-:-:-:1  \@P6 LDG.E.CI.$dtype load1B2, [track1B + ${dsize}x<2>];
---:-:6:-:1  \@P6 LDG.E.CI.$dtype load1B3, [track1B + ${dsize}x<3>];
+--:-:-:-:1  \@P6 LDG.E.CI.$dtypeB load1B0, [track1B + ${dsizeB}x<0>];
+--:-:-:-:1  \@P6 LDG.E.CI.$dtypeB load1B1, [track1B + ${dsizeB}x<1>];
+--:-:-:-:1  \@P6 LDG.E.CI.$dtypeB load1B2, [track1B + ${dsizeB}x<2>];
+--:-:6:-:1  \@P6 LDG.E.CI.$dtypeB load1B3, [track1B + ${dsizeB}x<3>];
 
                 };
 +]
@@ -738,13 +758,13 @@ sub vecB  { return $vecB || $vec; }
 LOOP:
 --:-:-:-:1      ISETP.GE.AND P0, PT, k, RZ, PT;
 [+
-    our ($dsize, $vsize, $dtype);
+    our ($dsizeA, $vsizeA, $dtypeA, $dsizeB, $vsizeB, $dtypeB);
     our %insert =
     (
         j0c1   => "--:-:-:-:1      ISETP.GE.AND P1, PT, k, 32, PT;\n" .
                   "--:-:-:-:1      IADD k, k, -32;\n",
 
-        (fp16() ?
+        (A16() ?
             vecA() ?
                 (
                     j0c8  => "02:-:-:-:1      F2F.F32.F16 load0A3, load0A1.H1;\n",
@@ -769,7 +789,7 @@ LOOP:
                 )
             : ()
         ),
-        (fp16() ?
+        (B16() ?
             vecB() ?
                 (
                     j1c30 => "10:-:-:-:1  \@P0 F2F.F32.F16 load0B3, load0B1.H1;\n",
@@ -811,23 +831,23 @@ LOOP:
                 (
                     j0c31 => "--:-:-:-:1      ISETP.EQ.AND P3, PT, predsA, 0x08, P1;\n",
 
-                    j0c52 => "02:-:2:-:1  \@P3 LDG.E.CI.$vsize load0A, [track0A];\n",
-                    j1c28 => "04:-:3:-:1  \@P3 LDG.E.CI.$vsize load1A, [track1A];\n",
+                    j0c52 => "02:-:2:-:1  \@P3 LDG.E.CI.$vsizeA load0A, [track0A];\n",
+                    j1c28 => "04:-:3:-:1  \@P3 LDG.E.CI.$vsizeA load1A, [track1A];\n",
 
                 ) : (
 
                     j0c31 => "--:-:-:-:1  \@P1 R2P PR, predsA, 0x78;\n",
                     j0c33 => "--:-:-:-:1 \@!P1 R2P PR, RZ,     0x78;\n",
 
-                    j0c46 => "02:-:-:-:1  \@P3 LDG.E.CI.$dtype load0A0, [track0A + ${dsize}x<0>];\n",
-                    j0c48 => "--:-:-:-:1  \@P4 LDG.E.CI.$dtype load0A1, [track0A + ${dsize}x<1>];\n",
-                    j0c50 => "--:-:-:-:1  \@P5 LDG.E.CI.$dtype load0A2, [track0A + ${dsize}x<2>];\n",
-                    j0c52 => "--:-:2:-:1  \@P6 LDG.E.CI.$dtype load0A3, [track0A + ${dsize}x<3>];\n",
+                    j0c46 => "02:-:-:-:1  \@P3 LDG.E.CI.$dtypeA load0A0, [track0A + ${dsizeA}x<0>];\n",
+                    j0c48 => "--:-:-:-:1  \@P4 LDG.E.CI.$dtypeA load0A1, [track0A + ${dsizeA}x<1>];\n",
+                    j0c50 => "--:-:-:-:1  \@P5 LDG.E.CI.$dtypeA load0A2, [track0A + ${dsizeA}x<2>];\n",
+                    j0c52 => "--:-:2:-:1  \@P6 LDG.E.CI.$dtypeA load0A3, [track0A + ${dsizeA}x<3>];\n",
 
-                    j1c22 => "04:-:-:-:1  \@P3 LDG.E.CI.$dtype load1A0, [track1A + ${dsize}x<0>];\n",
-                    j1c24 => "--:-:-:-:1  \@P4 LDG.E.CI.$dtype load1A1, [track1A + ${dsize}x<1>];\n",
-                    j1c26 => "--:-:-:-:1  \@P5 LDG.E.CI.$dtype load1A2, [track1A + ${dsize}x<2>];\n",
-                    j1c28 => "--:-:3:-:1  \@P6 LDG.E.CI.$dtype load1A3, [track1A + ${dsize}x<3>];\n",
+                    j1c22 => "04:-:-:-:1  \@P3 LDG.E.CI.$dtypeA load1A0, [track1A + ${dsizeA}x<0>];\n",
+                    j1c24 => "--:-:-:-:1  \@P4 LDG.E.CI.$dtypeA load1A1, [track1A + ${dsizeA}x<1>];\n",
+                    j1c26 => "--:-:-:-:1  \@P5 LDG.E.CI.$dtypeA load1A2, [track1A + ${dsizeA}x<2>];\n",
+                    j1c28 => "--:-:3:-:1  \@P6 LDG.E.CI.$dtypeA load1A3, [track1A + ${dsizeA}x<3>];\n",
                 )
 
             ) : (
@@ -836,7 +856,7 @@ LOOP:
                 j0c34 => "--:-:-:-:1  \@P0 STS [writeAs + 4x<1*32 + 0*16>], load0A1;\n",
                 j0c36 => "--:2:-:-:1  \@P0 STS [writeAs + 4x<0*32 + 0*16>], load0A0;\n",
 
-                j0c37 => "--:-:-:-:1  \@P1 IADD   track0A0.CC, track0A0, ${dsize}x<32>;\n",
+                j0c37 => "--:-:-:-:1  \@P1 IADD   track0A0.CC, track0A0, ${dsizeA}x<32>;\n",
                 j0c42 => "--:-:-:-:1  \@P1 IADD.X track0A1,    track0A1, RZ;\n",
 
                 j1c8  => "04:-:-:-:1  \@P0 STS [writeAs + 4x<3*32 + 1*16>], load1A3;\n",
@@ -844,7 +864,7 @@ LOOP:
                 j1c12 => "--:-:-:-:1  \@P0 STS [writeAs + 4x<1*32 + 1*16>], load1A1;\n",
                 j1c14 => "--:3:-:-:1  \@P0 STS [writeAs + 4x<0*32 + 1*16>], load1A0;\n",
 
-                j1c15 => "--:-:-:-:1  \@P1 IADD   track1A0.CC, track1A0, ${dsize}x<32>;\n",
+                j1c15 => "--:-:-:-:1  \@P1 IADD   track1A0.CC, track1A0, ${dsizeA}x<32>;\n",
                 j1c20 => "--:-:-:-:1  \@P1 IADD.X track1A1,    track1A1, RZ;\n",
 
                 vecA() ?
@@ -852,23 +872,23 @@ LOOP:
                     j0c31 => "--:-:-:-:1  \@P1 R2P PR, predsA, 0x60;\n",
                     j0c33 => "--:-:-:-:1 \@!P1 R2P PR, RZ,     0x60;\n",
 
-                    j0c52 => "02:-:2:-:1  \@P5 LDG.E.CI.$vsize load0A, [track0A];\n",
-                    j1c28 => "04:-:3:-:1  \@P6 LDG.E.CI.$vsize load1A, [track1A];\n",
+                    j0c52 => "02:-:2:-:1  \@P5 LDG.E.CI.$vsizeA load0A, [track0A];\n",
+                    j1c28 => "04:-:3:-:1  \@P6 LDG.E.CI.$vsizeA load1A, [track1A];\n",
 
                 ) : (
 
                     j0c31 => "--:-:-:-:1  \@P1 R2P PR, predsA, 0x60;\n",
                     j0c33 => "--:-:-:-:1 \@!P1 R2P PR, RZ,     0x60;\n",
 
-                    j0c46 => "02:-:-:-:1  \@P5 LDG.E.CI.$dtype load0A0, [track0A + ${dsize}x<0>];\n",
-                    j0c48 => "--:-:-:-:1  \@P5 LDG.E.CI.$dtype load0A1, [track0A + ${dsize}x<1>];\n",
-                    j0c50 => "--:-:-:-:1  \@P5 LDG.E.CI.$dtype load0A2, [track0A + ${dsize}x<2>];\n",
-                    j0c52 => "--:-:2:-:1  \@P5 LDG.E.CI.$dtype load0A3, [track0A + ${dsize}x<3>];\n",
+                    j0c46 => "02:-:-:-:1  \@P5 LDG.E.CI.$dtypeA load0A0, [track0A + ${dsizeA}x<0>];\n",
+                    j0c48 => "--:-:-:-:1  \@P5 LDG.E.CI.$dtypeA load0A1, [track0A + ${dsizeA}x<1>];\n",
+                    j0c50 => "--:-:-:-:1  \@P5 LDG.E.CI.$dtypeA load0A2, [track0A + ${dsizeA}x<2>];\n",
+                    j0c52 => "--:-:2:-:1  \@P5 LDG.E.CI.$dtypeA load0A3, [track0A + ${dsizeA}x<3>];\n",
 
-                    j1c22 => "04:-:-:-:1  \@P6 LDG.E.CI.$dtype load1A0, [track1A + ${dsize}x<0>];\n",
-                    j1c24 => "--:-:-:-:1  \@P6 LDG.E.CI.$dtype load1A1, [track1A + ${dsize}x<1>];\n",
-                    j1c26 => "--:-:-:-:1  \@P6 LDG.E.CI.$dtype load1A2, [track1A + ${dsize}x<2>];\n",
-                    j1c28 => "--:-:3:-:1  \@P6 LDG.E.CI.$dtype load1A3, [track1A + ${dsize}x<3>];\n",
+                    j1c22 => "04:-:-:-:1  \@P6 LDG.E.CI.$dtypeA load1A0, [track1A + ${dsizeA}x<0>];\n",
+                    j1c24 => "--:-:-:-:1  \@P6 LDG.E.CI.$dtypeA load1A1, [track1A + ${dsizeA}x<1>];\n",
+                    j1c26 => "--:-:-:-:1  \@P6 LDG.E.CI.$dtypeA load1A2, [track1A + ${dsizeA}x<2>];\n",
+                    j1c28 => "--:-:3:-:1  \@P6 LDG.E.CI.$dtypeA load1A3, [track1A + ${dsizeA}x<3>];\n",
                 )
             )
         ),
@@ -889,23 +909,23 @@ LOOP:
                 (
                     j1c53 => "--:-:-:-:1      ISETP.EQ.AND P3, PT, predsB, 0x08, P1;\n",
 
-                    j2c14 => "10:-:5:-:1  \@P3 LDG.E.CI.$vsize load0B, [track0B];\n",
-                    j2c62 => "20:-:6:-:1  \@P3 LDG.E.CI.$vsize load1B, [track1B];\n",
+                    j2c14 => "10:-:5:-:1  \@P3 LDG.E.CI.$vsizeB load0B, [track0B];\n",
+                    j2c62 => "20:-:6:-:1  \@P3 LDG.E.CI.$vsizeB load1B, [track1B];\n",
 
                 ) : (
 
                     j1c53 => "--:-:-:-:1  \@P1 R2P PR, predsB, 0x78;\n",
                     j1c55 => "--:-:-:-:1 \@!P1 R2P PR, RZ,     0x78;\n",
 
-                    j2c8  => "10:-:-:-:1  \@P3 LDG.E.CI.$dtype load0B0, [track0B + ${dsize}x<0>];\n",
-                    j2c10 => "--:-:-:-:1  \@P4 LDG.E.CI.$dtype load0B1, [track0B + ${dsize}x<1>];\n",
-                    j2c12 => "--:-:-:-:1  \@P5 LDG.E.CI.$dtype load0B2, [track0B + ${dsize}x<2>];\n",
-                    j2c14 => "--:-:5:-:1  \@P6 LDG.E.CI.$dtype load0B3, [track0B + ${dsize}x<3>];\n",
+                    j2c8  => "10:-:-:-:1  \@P3 LDG.E.CI.$dtypeB load0B0, [track0B + ${dsizeB}x<0>];\n",
+                    j2c10 => "--:-:-:-:1  \@P4 LDG.E.CI.$dtypeB load0B1, [track0B + ${dsizeB}x<1>];\n",
+                    j2c12 => "--:-:-:-:1  \@P5 LDG.E.CI.$dtypeB load0B2, [track0B + ${dsizeB}x<2>];\n",
+                    j2c14 => "--:-:5:-:1  \@P6 LDG.E.CI.$dtypeB load0B3, [track0B + ${dsizeB}x<3>];\n",
 
-                    j2c56 => "20:-:-:-:1  \@P3 LDG.E.CI.$dtype load1B0, [track1B + ${dsize}x<0>];\n",
-                    j2c58 => "--:-:-:-:1  \@P4 LDG.E.CI.$dtype load1B1, [track1B + ${dsize}x<1>];\n",
-                    j2c60 => "--:-:-:-:1  \@P5 LDG.E.CI.$dtype load1B2, [track1B + ${dsize}x<2>];\n",
-                    j2c62 => "--:-:6:-:1  \@P6 LDG.E.CI.$dtype load1B3, [track1B + ${dsize}x<3>];\n",
+                    j2c56 => "20:-:-:-:1  \@P3 LDG.E.CI.$dtypeB load1B0, [track1B + ${dsizeB}x<0>];\n",
+                    j2c58 => "--:-:-:-:1  \@P4 LDG.E.CI.$dtypeB load1B1, [track1B + ${dsizeB}x<1>];\n",
+                    j2c60 => "--:-:-:-:1  \@P5 LDG.E.CI.$dtypeB load1B2, [track1B + ${dsizeB}x<2>];\n",
+                    j2c62 => "--:-:6:-:1  \@P6 LDG.E.CI.$dtypeB load1B3, [track1B + ${dsizeB}x<3>];\n",
                 )
             ) : (
                 j1c52 => "10:-:-:-:1  \@P0 STS [writeBs + 4x<3*32 + 0*16>], load0B3;\n",
@@ -913,7 +933,7 @@ LOOP:
                 j1c56 => "--:-:-:-:1  \@P0 STS [writeBs + 4x<1*32 + 0*16>], load0B1;\n",
                 j1c58 => "--:5:-:-:1  \@P0 STS [writeBs + 4x<0*32 + 0*16>], load0B0;\n",
 
-                j1c57 => "--:-:-:-:1  \@P1 IADD   track0B0.CC, track0B0, ${dsize}x<32>;\n",
+                j1c57 => "--:-:-:-:1  \@P1 IADD   track0B0.CC, track0B0, ${dsizeB}x<32>;\n",
                 j1c62 => "--:-:-:-:1  \@P1 IADD.X track0B1,    track0B1, RZ;\n",
 
                 j2c38 => "20:-:-:-:1  \@P0 STS [writeBs + 4x<3*32 + 1*16>], load1B3;\n",
@@ -921,7 +941,7 @@ LOOP:
                 j2c42 => "--:-:-:-:1  \@P0 STS [writeBs + 4x<1*32 + 1*16>], load1B1;\n",
                 j2c44 => "--:6:-:-:1  \@P0 STS [writeBs + 4x<0*32 + 1*16>], load1B0;\n",
 
-                j2c45 => "--:-:-:-:1  \@P1 IADD   track1B0.CC, track1B0, ${dsize}x<32>;\n",
+                j2c45 => "--:-:-:-:1  \@P1 IADD   track1B0.CC, track1B0, ${dsizeB}x<32>;\n",
                 j2c50 => "--:-:-:-:1  \@P1 IADD.X track1B1,    track1B1, RZ;\n",
 
                 vecB() ?
@@ -929,23 +949,23 @@ LOOP:
                     j1c53 => "--:-:-:-:1  \@P1 R2P PR, predsB, 0x60;\n",
                     j1c55 => "--:-:-:-:1 \@!P1 R2P PR, RZ,     0x60;\n",
 
-                    j2c14 => "10:-:5:-:1  \@P5 LDG.E.CI.$vsize load0B, [track0B];\n",
-                    j2c62 => "20:-:6:-:1  \@P6 LDG.E.CI.$vsize load1B, [track1B];\n",
+                    j2c14 => "10:-:5:-:1  \@P5 LDG.E.CI.$vsizeB load0B, [track0B];\n",
+                    j2c62 => "20:-:6:-:1  \@P6 LDG.E.CI.$vsizeB load1B, [track1B];\n",
 
                 ) : (
 
                     j1c53 => "--:-:-:-:1  \@P1 R2P PR, predsB, 0x60;\n",
                     j1c55 => "--:-:-:-:1 \@!P1 R2P PR, RZ,     0x60;\n",
 
-                    j2c8  => "10:-:-:-:1  \@P5 LDG.E.CI.$dtype load0B0, [track0B + ${dsize}x<0>];\n",
-                    j2c10 => "--:-:-:-:1  \@P5 LDG.E.CI.$dtype load0B1, [track0B + ${dsize}x<1>];\n",
-                    j2c12 => "--:-:-:-:1  \@P5 LDG.E.CI.$dtype load0B2, [track0B + ${dsize}x<2>];\n",
-                    j2c14 => "--:-:5:-:1  \@P5 LDG.E.CI.$dtype load0B3, [track0B + ${dsize}x<3>];\n",
+                    j2c8  => "10:-:-:-:1  \@P5 LDG.E.CI.$dtypeB load0B0, [track0B + ${dsizeB}x<0>];\n",
+                    j2c10 => "--:-:-:-:1  \@P5 LDG.E.CI.$dtypeB load0B1, [track0B + ${dsizeB}x<1>];\n",
+                    j2c12 => "--:-:-:-:1  \@P5 LDG.E.CI.$dtypeB load0B2, [track0B + ${dsizeB}x<2>];\n",
+                    j2c14 => "--:-:5:-:1  \@P5 LDG.E.CI.$dtypeB load0B3, [track0B + ${dsizeB}x<3>];\n",
 
-                    j2c56 => "20:-:-:-:1  \@P6 LDG.E.CI.$dtype load1B0, [track1B + ${dsize}x<0>];\n",
-                    j2c58 => "--:-:-:-:1  \@P6 LDG.E.CI.$dtype load1B1, [track1B + ${dsize}x<1>];\n",
-                    j2c60 => "--:-:-:-:1  \@P6 LDG.E.CI.$dtype load1B2, [track1B + ${dsize}x<2>];\n",
-                    j2c62 => "--:-:6:-:1  \@P6 LDG.E.CI.$dtype load1B3, [track1B + ${dsize}x<3>];\n",
+                    j2c56 => "20:-:-:-:1  \@P6 LDG.E.CI.$dtypeB load1B0, [track1B + ${dsizeB}x<0>];\n",
+                    j2c58 => "--:-:-:-:1  \@P6 LDG.E.CI.$dtypeB load1B1, [track1B + ${dsizeB}x<1>];\n",
+                    j2c60 => "--:-:-:-:1  \@P6 LDG.E.CI.$dtypeB load1B2, [track1B + ${dsizeB}x<2>];\n",
+                    j2c62 => "--:-:6:-:1  \@P6 LDG.E.CI.$dtypeB load1B3, [track1B + ${dsizeB}x<3>];\n",
                 )
             )
         ),
@@ -1025,14 +1045,14 @@ LOOP:
 --:-:-:-:1      IADD    cy12, cy00, 12;
 
 --:-:-:-:1      MOV cdc, param_cdc;
---:-:-:-:1      SHL cdc4,  cdc, [+ dshift() + 2 +];
---:-:-:-:1      SHL cdc16, cdc, [+ dshift() + 4 +];
+--:-:-:-:1      SHL cdc4,  cdc, [+ dshiftC() + 2 +];
+--:-:-:-:1      SHL cdc16, cdc, [+ dshiftC() + 4 +];
 
 // trackC += cy*cdc + cx;
 --:-:-:-:1      XMAD.LO  tc, cy00, cdc, cx, xmad_tc;
 
---:-:-:-:1      LEA      track00C0.CC, tc, param_C[0],     [+ dshift() +];
---:-:-:-:1      LEA.HI.X track00C1,    tc, param_C[1], RZ, [+ dshift() +];
+--:-:-:-:1      LEA      track00C0.CC, tc, param_C[0],     [+ dshiftC() +];
+--:-:-:-:1      LEA.HI.X track00C1,    tc, param_C[1], RZ, [+ dshiftC() +];
 --:-:-:-:1      IADD     track04C0.CC, track00C0, cdc4;
 --:-:-:-:1      IADD.X   track04C1,    track00C1, RZ;
 --:-:-:-:1      IADD     track08C0.CC, track04C0, cdc4;
@@ -1171,13 +1191,13 @@ LOOP:
 STORE_C:
 
 --:-:-:-:0 @!P0 MOV c00, RZ;
---:-:-:-:1  @P0 LDG.E.CI.[+ dtype() +] c00, [track00C];
+--:-:-:-:1  @P0 LDG.E.CI.[+ dtypeC() +] c00, [track00C];
 --:-:-:-:0 @!P1 MOV c04, RZ;
---:-:5:-:1  @P1 LDG.E.CI.[+ dtype() +] c04, [track04C];
+--:-:5:-:1  @P1 LDG.E.CI.[+ dtypeC() +] c04, [track04C];
 --:-:-:-:0 @!P2 MOV c08, RZ;
---:-:-:-:1  @P2 LDG.E.CI.[+ dtype() +] c08, [track08C];
+--:-:-:-:1  @P2 LDG.E.CI.[+ dtypeC() +] c08, [track08C];
 --:-:-:-:0 @!P3 MOV c12, RZ;
---:-:6:-:1  @P3 LDG.E.CI.[+ dtype() +] c12, [track12C];
+--:-:6:-:1  @P3 LDG.E.CI.[+ dtypeC() +] c12, [track12C];
 
 --:-:-:-:0      ISETP.LT.AND P0, PT, cy00, param_m, P4; // cy00 < m && cx < n
 --:-:-:-:1      LDS c00_0, [readCs + 4x< 0*256 + 0*32 + 0*16>];
@@ -1241,7 +1261,7 @@ STORE_C:
 --:-:-:-:1      FADD c12_4, c12_4, c12_5;
 --:-:-:-:1      FADD c12_6, c12_6, c12_7;
 [+
-    fp16() ? q{
+    C16() ? q{
 10:-:1:-:1      F2F.F32.F16 c00, c00;
 --:-:2:-:1      F2F.F32.F16 c04, c04;
 20:-:3:-:1      F2F.F32.F16 c08, c08;
@@ -1269,7 +1289,7 @@ STORE_C:
 </SCHEDULE_BLOCK>
 
 [+
-    fp16() ? q{
+    C16() ? q{
 --:-:1:-:1      F2F.F16.F32 c00, c00;
 --:-:2:-:1      F2F.F16.F32 c04, c04;
 --:-:3:-:1      F2F.F16.F32 c08, c08;
@@ -1277,9 +1297,9 @@ STORE_C:
     } : '';
 +]
 
-01:1:-:-:1  @P0 STG.E.CG.[+ dtype() +] [track00C], c00;
-02:2:-:-:1  @P1 STG.E.CG.[+ dtype() +] [track04C], c04;
-04:3:-:-:1  @P2 STG.E.CG.[+ dtype() +] [track08C], c08;
-08:4:-:-:1  @P3 STG.E.CG.[+ dtype() +] [track12C], c12;
+01:1:-:-:1  @P0 STG.E.CG.[+ dtypeC() +] [track00C], c00;
+02:2:-:-:1  @P1 STG.E.CG.[+ dtypeC() +] [track04C], c04;
+04:3:-:-:1  @P2 STG.E.CG.[+ dtypeC() +] [track08C], c08;
+08:4:-:-:1  @P3 STG.E.CG.[+ dtypeC() +] [track12C], c12;
 
 --:-:-:-:5      RET;
