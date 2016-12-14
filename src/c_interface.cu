@@ -1,0 +1,262 @@
+#include <vector>
+#include <string>
+#include <unordered_map>
+#include <iostream>
+#include <mutex>
+#include <tuple>
+
+#include <stdint.h>
+
+#include <cuda.h>
+
+#include "c_interface.h"
+
+#include "kernel_headers.h"
+
+namespace {
+#include "static_kernel_information.h"
+
+std::mutex load_kernel_mutex_;
+
+std::unordered_map<std::string, CUfunction> kernels_;
+
+bool loadKernelsHelper(const std::unordered_map<std::string, const uint8_t*>& kernels) {
+  for (auto kernel : kernels) {
+    if (kernels_.count(kernel.first) > 0)
+      continue;
+
+    CUmodule module;
+
+    CUresult res = cuModuleLoadData(&module, kernel.second);
+    if (res != CUDA_SUCCESS) {
+      const char* error_string;
+      cuGetErrorString(res, &error_string);
+      std::cerr << "Failed to load " << kernel.first << " " << 
+                error_string << std::endl;
+      return false;
+    }
+
+    CUfunction function;
+
+    std::string kernel_name = kernel.first.substr(0, kernel.first.size() - 6);
+
+    res = cuModuleGetFunction(&function, module, kernel_name.c_str());
+    if (res != CUDA_SUCCESS) {
+      const char* error_string;
+      cuGetErrorString(res, &error_string);
+      std::cerr << "Failed to extract " << kernel_name << " " << 
+                error_string << std::endl;
+      return false;
+    }
+
+    kernels_.insert(std::make_pair(kernel.first, function));
+  }
+
+  return true;
+}
+
+bool loadKernels(int major) {
+  std::lock_guard<std::mutex> lock(load_kernel_mutex_);
+
+  if (major == 5)
+    return loadKernelsHelper(kernels_50);
+  else if (major == 6) 
+    return loadKernelsHelper(kernels_60);
+  else {
+    std::cerr << "Arch must be 5 or 6" << std::endl;
+    return false;
+  }
+}
+
+std::tuple<CUresult, int, int, int> getDeviceProperties(CUdevice& device) {
+  int major, minor;
+  CUresult res = cuDeviceGetAttribute(&major, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, device);
+  if (res != CUDA_SUCCESS)
+    return std::make_tuple(res, -1, -1, -1);
+
+  res = cuDeviceGetAttribute(&minor, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, device);
+  if (res != CUDA_SUCCESS)
+    return std::make_tuple(res, -1, -1, -1);
+
+  int sm_count;
+  res = cuDeviceGetAttribute(&sm_count, CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT, device);
+  if (res != CUDA_SUCCESS)
+    return std::make_tuple(res, -1, -1, -1);
+
+  return std::make_tuple(CUDA_SUCCESS, major, minor, sm_count);
+}
+
+std::pair<int, int> closest_divisor(int val, int div) {
+  const std::vector<int> primes = {2, 3, 5, 7, 11, 13};
+  for (auto i : primes) {
+    if (val % i == 0) {
+      return std::make_pair(i, val / i);
+    }
+  }
+  return std::make_pair(1, val);
+}
+
+std::string get_op_string(bool a_t, bool b_t) {
+  if      (!a_t && !b_t) return "NN";
+  else if (a_t && !b_t)  return "TN";
+  else if (!a_t && b_t)  return "NT";
+  else                   return "TT";
+}
+
+bool gemm(std::string precision, void *A, void *B, void *C,
+          bool a_t, bool b_t,
+          int m, int n, int k,
+          int lda, int ldb, int ldc,
+          float alpha, float beta,
+          CUstream stream, int grid, int shared) {
+  std::string kernel_op = get_op_string(a_t, b_t);
+
+  if (grid >= selections[precision][kernel_op].size())
+    return false;
+
+  kernel_properties kp = selections[precision][kernel_op][grid];
+
+  if (shared >= kp.shared_sizes.size())
+    return false;
+
+  bool vec4A, vec8A;
+  bool vec4B, vec8B;
+  if (a_t) {
+    vec4A = (lda & 3) == 0 && (m & 3) == 0; //multiple of 4
+    vec8A = (lda & 7) == 0 && (m & 7) == 0; //multiple of 8
+  }
+  else {
+    vec4A = (lda & 3) == 0 && (k & 3) == 0; //multiple of 4
+    vec8A = (lda & 7) == 0 && (k & 7) == 0; //multiple of 8
+  }
+
+  if (b_t) {
+    vec4B = (ldb & 3) == 0 && (k & 3) == 0; //multiple of 4
+    vec8B = (ldb & 7) == 0 && (k & 7) == 0; //multiple of 8
+  }
+  else {
+    vec4B = (ldb & 3) == 0 && (n & 3) == 0; //multiple of 4
+    vec8B = (ldb & 7) == 0 && (n & 7) == 0; //multiple of 8
+  }
+
+  bool vec4C = (ldc & 3) == 0 && (n & 3) == 0;
+
+  bool vecA = (kp.vA == 4 && vec4A) || (kp.vA == 8 && vec8A);
+  bool vecB = (kp.vB == 4 && vec4B) || (kp.vB == 8 && vec8B);
+  bool vecC = kp.vC == 1 || vec4C;
+
+  bool vec = vecA && vecB && vecC;
+
+  CUdevice device;
+  CUresult res = cuCtxGetDevice(&device);
+  if (res != CUDA_SUCCESS) 
+    return false;
+
+  bool success;
+  int major, minor, sm_count;
+
+  std::tie(success, major, minor, sm_count) = getDeviceProperties(device);
+
+  if (success != CUDA_SUCCESS)
+    return false;
+
+  std::string kernel_string;
+  kernel_string.reserve(64);
+
+  kernel_string += precision + "gemm_" + kp.tile_string + 
+                   "_" + kernel_op;
+  if (vec)
+    kernel_string += "_vec";
+
+  if (major == 5)
+    kernel_string += "_sm_50";
+  else if (major == 6)
+    kernel_string += "_sm_60";
+  else
+    return false;
+
+  if (kernels_.count(kernel_string) == 0) {
+    loadKernels(major);
+  }
+
+  CUfunction kernel = kernels_[kernel_string];
+
+  int blk_A = (m + kp.tile_m - 1) / kp.tile_m;
+  int blk_B = (n + kp.tile_n - 1) / kp.tile_n;
+
+  int blk_a, blk_b;
+  std::tie(blk_a, blk_A) = closest_divisor(blk_A, kp.div);
+  std::tie(blk_b, blk_B) = closest_divisor(blk_B, kp.div);
+
+  if (blk_a == 1)
+    std::tie(blk_a, blk_A) = std::make_pair(blk_A, 1);
+
+  void *args[13] = {&C, &A, &B, &alpha, &beta, &lda, &ldb, &ldc,
+                    &m, &n, &k, &blk_a, &blk_b};
+
+  dim3 gridSize(blk_a * blk_b, blk_B, blk_A);
+  dim3 blockSize(kp.threads, 1, 1);
+
+  res = cuLaunchKernel(kernel, gridSize.x, gridSize.y, gridSize.z,
+                       blockSize.x, blockSize.y, blockSize.z,
+                       kp.shared_sizes[shared], stream, args, NULL);
+
+  if (res != CUDA_SUCCESS) {
+    const char* error_string;
+    cuGetErrorString(res, &error_string);
+    std::cerr << "Failed to execute " << kernel_string << " " << 
+      error_string << std::endl;
+    return false;
+  }
+
+  return true;
+}
+
+};
+
+bool get_grid_limits(char precision, bool a_t, bool b_t, int *grid)
+{
+  std::string prec_string(1, precision);
+
+  *grid = selections[prec_string][get_op_string(a_t, b_t)].size();
+  return true;
+}
+
+bool get_shared_limits(char precision, bool a_t, bool b_t, int grid, int *shared) {
+  std::string prec_string(1, precision);
+
+  if (grid >= selections[prec_string][get_op_string(a_t, b_t)].size())
+    return false;
+
+  *shared = selections[prec_string][get_op_string(a_t, b_t)][grid].shared_sizes.size();
+
+  return true;
+}
+
+bool openai_sgemm(float *A, float *B, float *C,
+           bool a_t, bool b_t,
+           int m, int n, int k,
+           int lda, int ldb, int ldc,
+           float alpha, float beta,
+           CUstream stream, int grid, int shared) {
+  return gemm("s",
+              static_cast<void*>(A),
+              static_cast<void*>(B),
+              static_cast<void*>(C),
+              a_t, b_t, m, n, k, lda, ldb, ldc,
+              alpha, beta, stream, grid, shared);
+}
+
+bool openai_hgemm(uint16_t *A, uint16_t *B, uint16_t *C,
+           bool a_t, bool b_t,
+           int m, int n, int k,
+           int lda, int ldb, int ldc,
+           float alpha, float beta,
+           CUstream stream, int grid, int shared) {
+  return gemm("h",
+              static_cast<void*>(A),
+              static_cast<void*>(B),
+              static_cast<void*>(C),
+              a_t, b_t, m, n, k, lda, ldb, ldc,
+              alpha, beta, stream, grid, shared);
+}
