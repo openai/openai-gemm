@@ -7,14 +7,63 @@
 
 #include <stdint.h>
 
-#include <cuda.h>
+typedef struct CUfunc_st *CUfunction;
+typedef struct CUmod_st *CUmodule;
+typedef struct CUstream_st *CUstream;
+typedef int CUdevice;
 
-#include "c_interface.h"
+//include the cuda function prototypes here so that we don't need to know
+//anything about cuda to compile this file - makes building with bazel
+//a million times easier
+extern "C" {
 
-#include "kernel_headers.h"
+int
+#ifdef _WIN32
+__stdcall
+#endif
+cuModuleLoadData(CUmodule *, const void *);
+
+int
+#ifdef _WIN32
+__stdcall
+#endif
+cuModuleGetFunction(CUfunction *, CUmodule, const char *);
+
+int
+#ifdef _WIN32
+__stdcall
+#endif
+cuDeviceGetAttribute(int *, int, CUdevice);
+
+int
+#ifdef _WIN32
+__stdcall
+#endif
+cuLaunchKernel(CUfunction,
+               unsigned int,
+               unsigned int,
+               unsigned int,
+               unsigned int,
+               unsigned int,
+               unsigned int,
+               unsigned int,
+               CUstream,
+               void **,
+               void **);
+
+int
+#ifdef _WIN32
+__stdcall
+#endif
+cuCtxGetDevice(CUdevice *);
+
+};
+
+#include "include/c_interface.h"
+#include "include/kernel_headers.h"
 
 namespace {
-#include "static_kernel_information.h"
+#include "include/static_kernel_information.h"
 
 std::mutex load_kernel_mutex_;
 
@@ -27,12 +76,10 @@ bool loadKernelsHelper(const std::unordered_map<std::string, const uint8_t*>& ke
 
     CUmodule module;
 
-    CUresult res = cuModuleLoadData(&module, kernel.second);
-    if (res != CUDA_SUCCESS) {
-      const char* error_string;
-      cuGetErrorString(res, &error_string);
-      std::cerr << "Failed to load " << kernel.first << " " << 
-                error_string << std::endl;
+    int res = cuModuleLoadData(&module, kernel.second);
+    if (res != 0) {
+      std::cerr << "Failed to load " << kernel.first << " " <<
+                res << std::endl;
       return false;
     }
 
@@ -41,11 +88,9 @@ bool loadKernelsHelper(const std::unordered_map<std::string, const uint8_t*>& ke
     std::string kernel_name = kernel.first.substr(0, kernel.first.size() - 6);
 
     res = cuModuleGetFunction(&function, module, kernel_name.c_str());
-    if (res != CUDA_SUCCESS) {
-      const char* error_string;
-      cuGetErrorString(res, &error_string);
-      std::cerr << "Failed to extract " << kernel_name << " " << 
-                error_string << std::endl;
+    if (res != 0) {
+      std::cerr << "Failed to extract " << kernel_name << " " <<
+                res << std::endl;
       return false;
     }
 
@@ -60,7 +105,7 @@ bool loadKernels(int major) {
 
   if (major == 5)
     return loadKernelsHelper(kernels_50);
-  else if (major == 6) 
+  else if (major == 6)
     return loadKernelsHelper(kernels_60);
   else {
     std::cerr << "Arch must be 5 or 6" << std::endl;
@@ -68,22 +113,17 @@ bool loadKernels(int major) {
   }
 }
 
-std::tuple<CUresult, int, int, int> getDeviceProperties(CUdevice& device) {
+std::tuple<int, int, int> getDeviceProperties(CUdevice& device) {
   int major, minor;
-  CUresult res = cuDeviceGetAttribute(&major, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, device);
-  if (res != CUDA_SUCCESS)
-    return std::make_tuple(res, -1, -1, -1);
+  int res = cuDeviceGetAttribute(&major, 75, device);
+  if (res != 0)
+    return std::make_tuple(res, -1, -1);
 
-  res = cuDeviceGetAttribute(&minor, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, device);
-  if (res != CUDA_SUCCESS)
-    return std::make_tuple(res, -1, -1, -1);
+  res = cuDeviceGetAttribute(&minor, 76, device);
+  if (res != 0)
+    return std::make_tuple(res, -1, -1);
 
-  int sm_count;
-  res = cuDeviceGetAttribute(&sm_count, CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT, device);
-  if (res != CUDA_SUCCESS)
-    return std::make_tuple(res, -1, -1, -1);
-
-  return std::make_tuple(CUDA_SUCCESS, major, minor, sm_count);
+  return std::make_tuple(0, major, minor);
 }
 
 std::pair<int, int> closest_divisor(int val, int div) {
@@ -108,7 +148,7 @@ bool gemm(std::string precision, void *A, void *B, void *C,
           int m, int n, int k,
           int lda, int ldb, int ldc,
           float alpha, float beta,
-          CUstream stream, int grid, int shared) {
+          CUstream stream, unsigned int grid, unsigned int shared) {
   std::string kernel_op = get_op_string(a_t, b_t);
 
   if (grid >= selections[precision][kernel_op].size())
@@ -148,22 +188,22 @@ bool gemm(std::string precision, void *A, void *B, void *C,
   bool vec = vecA && vecB && vecC;
 
   CUdevice device;
-  CUresult res = cuCtxGetDevice(&device);
-  if (res != CUDA_SUCCESS) 
+  int res = cuCtxGetDevice(&device);
+  if (res != 0)
     return false;
 
   bool success;
-  int major, minor, sm_count;
+  int major, minor;
 
-  std::tie(success, major, minor, sm_count) = getDeviceProperties(device);
+  std::tie(success, major, minor) = getDeviceProperties(device);
 
-  if (success != CUDA_SUCCESS)
+  if (success != 0)
     return false;
 
   std::string kernel_string;
   kernel_string.reserve(64);
 
-  kernel_string += precision + "gemm_" + kp.tile_string + 
+  kernel_string += precision + "gemm_" + kp.tile_string +
                    "_" + kernel_op;
   if (vec)
     kernel_string += "_vec";
@@ -194,18 +234,13 @@ bool gemm(std::string precision, void *A, void *B, void *C,
   void *args[13] = {&C, &A, &B, &alpha, &beta, &lda, &ldb, &ldc,
                     &m, &n, &k, &blk_a, &blk_b};
 
-  dim3 gridSize(blk_a * blk_b, blk_B, blk_A);
-  dim3 blockSize(kp.threads, 1, 1);
-
-  res = cuLaunchKernel(kernel, gridSize.x, gridSize.y, gridSize.z,
-                       blockSize.x, blockSize.y, blockSize.z,
+  res = cuLaunchKernel(kernel, blk_a * blk_b, blk_B, blk_A,
+                       kp.threads, 1, 1,
                        kp.shared_sizes[shared], stream, args, NULL);
 
-  if (res != CUDA_SUCCESS) {
-    const char* error_string;
-    cuGetErrorString(res, &error_string);
-    std::cerr << "Failed to execute " << kernel_string << " " << 
-      error_string << std::endl;
+  if (res != 0) {
+    std::cerr << "Failed to execute " << kernel_string << " " <<
+      res << std::endl;
     return false;
   }
 
@@ -214,7 +249,7 @@ bool gemm(std::string precision, void *A, void *B, void *C,
 
 };
 
-bool get_grid_limits(char precision, bool a_t, bool b_t, int *grid)
+bool get_grid_limits(char precision, bool a_t, bool b_t, unsigned int *grid)
 {
   std::string prec_string(1, precision);
 
@@ -222,7 +257,7 @@ bool get_grid_limits(char precision, bool a_t, bool b_t, int *grid)
   return true;
 }
 
-bool get_shared_limits(char precision, bool a_t, bool b_t, int grid, int *shared) {
+bool get_shared_limits(char precision, bool a_t, bool b_t, unsigned int grid, unsigned int *shared) {
   std::string prec_string(1, precision);
 
   if (grid >= selections[prec_string][get_op_string(a_t, b_t)].size())
@@ -238,7 +273,7 @@ bool openai_sgemm(float *A, float *B, float *C,
            int m, int n, int k,
            int lda, int ldb, int ldc,
            float alpha, float beta,
-           CUstream stream, int grid, int shared) {
+           CUstream stream, unsigned int grid, unsigned int shared) {
   return gemm("s",
               static_cast<void*>(A),
               static_cast<void*>(B),
@@ -252,7 +287,7 @@ bool openai_hgemm(uint16_t *A, uint16_t *B, uint16_t *C,
            int m, int n, int k,
            int lda, int ldb, int ldc,
            float alpha, float beta,
-           CUstream stream, int grid, int shared) {
+           CUstream stream, unsigned int grid, unsigned int shared) {
   return gemm("h",
               static_cast<void*>(A),
               static_cast<void*>(B),

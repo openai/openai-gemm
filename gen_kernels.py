@@ -1,7 +1,13 @@
-import re
-import time
+import glob
 import os.path
+import re
 import subprocess
+import sys
+import time
+
+base_dir  = os.path.dirname(__file__)
+maxas_dir = os.path.join(base_dir, "maxas")
+sass_dir  = os.path.join(base_dir, "sass")
 
 # Tile sizes:      m,   n,  k, vA,vB,vC  div,  op (dynamic shared options)
 k128x128x8    = (128, 128,  8,  4, 4, 1,   2,  0, (0,))
@@ -25,10 +31,6 @@ selections = {
         "TT" : (k128x128x8, k32x32x32),
     },
 }
-
-base_dir  = os.path.dirname(__file__)
-maxas_dir = os.path.join(base_dir, "maxas")
-sass_dir  = os.path.join(base_dir, "sass")
 
 kernels = {
     # Generic gemm tiles
@@ -85,8 +87,8 @@ _kernel_template = r"""
 }}
 """
 
-def _get_cache_dir(subdir=None):
 
+def _get_cache_dir(subdir=None):
     cache_dir = 'temp/'
 
     if subdir:
@@ -98,8 +100,8 @@ def _get_cache_dir(subdir=None):
 
     return cache_dir
 
-def get_ptx_file(kernel_spec, kernel_name, arch, ptx_ver):
 
+def get_ptx_file(kernel_spec, kernel_name, arch, ptx_ver):
     ptx_dir = _get_cache_dir([arch, 'ptx'])
 
     thread_spec = kernel_spec["threads"]
@@ -145,16 +147,6 @@ def get_ptx_file(kernel_spec, kernel_name, arch, ptx_ver):
 
 include_re = re.compile(r'^<INCLUDE\s+file="([^"]+)"\s*/>')
 
-def extract_includes(name, includes=None):
-    if not includes:
-        includes = list()
-    sass_file = os.path.join(sass_dir, name)
-    includes.append((sass_file, os.path.getmtime(sass_file)))
-    for line in open(sass_file, "r"):
-        match = include_re.search(line)
-        if match:
-            extract_includes(match.group(1), includes)
-    return includes
 
 def run_command(cmdlist):
     cmd  = " ".join(cmdlist)
@@ -163,10 +155,12 @@ def run_command(cmdlist):
     if proc.returncode:
         raise RuntimeError("Error(%d):\n%s\n%s" % (proc.returncode, cmd, err))
 
-def get_kernel(base_name, options=None, major=6, minor=2):
 
+def get_kernel(base_name, major, minor, options=None):
     if major < 5:
         raise RuntimeError("sass kernels require Maxwell or greater class hardware")
+    elif major >= 7:
+        raise RuntimeError("sm version 7 or greater is not supported")
 
     arch = "sm_%d%d" % (major, minor)
 
@@ -200,50 +194,36 @@ def get_kernel(base_name, options=None, major=6, minor=2):
     sass_name  = kernel_spec["sass"] + ".sass"
     cubin_name = kernel_name + ".cubin"
     cubin_dir  = _get_cache_dir([arch, 'cubin'])
-    header_dir = _get_cache_dir([arch, 'header'])
+    header_dir = os.path.join(base_dir, "include/kernels")
 
     ptx_version = "4.2" if major < 6 else "5.0"
     ptx_file   = get_ptx_file(kernel_spec, kernel_name, arch, ptx_version)
-    sass_file  = os.path.join(sass_dir, sass_name)
     cubin_file = os.path.join(cubin_dir, cubin_name)
-    header_file = os.path.join(header_dir, kernel_name + ".h")
+    sass_file   = os.path.join(sass_dir, sass_name)
+    header_file = os.path.join(header_dir, kernel_name + "_" + arch + ".h")
 
     if not os.path.exists(sass_file):
         raise RuntimeError("Missing: %s for kernel: %s" % (sass_name, kernel_name))
 
-    ptx_mtime   = os.path.getmtime(ptx_file)
-    cubin_mtime = os.path.getmtime(cubin_file) if os.path.exists(cubin_file) else 0
+    # build the cubin and run maxas in the same command
+    # we don't want the chance of a generated cubin not processed by maxas (in case user hits ^C in between these steps)
+    command_string = [ "ptxas -v -arch", arch, "-o", cubin_file, ptx_file, ";" ] + maxas_i + [sass_file, cubin_file]
+    run_command(command_string)
+    cubin_mtime = time.time()
 
-    build_cubin = False
-    if ptx_mtime > cubin_mtime:
-        build_cubin = True
-
-    includes = extract_includes(sass_name)
-    for include, include_mtime in includes:
-        if include_mtime > cubin_mtime:
-            build_cubin = True
-            break
-
-    if build_cubin:
-        # build the cubin and run maxas in the same command
-        # we don't want the chance of a generated cubin not processed by maxas (in case user hits ^C in between these steps)
-        run_command([ "ptxas -v -arch", arch, "-o", cubin_file, ptx_file, ";" ] + maxas_i + [sass_file, cubin_file])
-        cubin_mtime = time.time()
-
-        # now also generate the associated header file containing the cubin
-        with open(cubin_file, 'rb') as input_file:
-            with open(header_file, 'wb') as output_file:
-                output_file.write('const uint8_t %s[] = {' % (kernel_name + "_" + arch))
+    # now also generate the associated header file containing the cubin
+    with open(cubin_file, 'rb') as input_file:
+        with open(header_file, 'wb') as output_file:
+            output_file.write('const uint8_t %s[] = {' % (kernel_name + "_" + arch))
+            byte = input_file.read(1)
+            count = 0
+            while byte:
+                if count % 12 == 0:
+                    output_file.write('\n   ')
+                output_file.write(' 0x' + byte.encode('hex') + ',')
                 byte = input_file.read(1)
-                count = 0
-                while byte:
-                    if count % 12 == 0:
-                        output_file.write('\n   ')
-                    output_file.write(' 0x' + byte.encode('hex') + ',')
-                    byte = input_file.read(1)
-                    count += 1
-                output_file.write('\n};')
-
+                count += 1
+            output_file.write('\n};')
 
 
 def gen_kernels():
@@ -261,10 +241,12 @@ def gen_kernels():
                             base = "%sgemm_%dx%dx%d" % (prefix, tileM, tileN, tileK)
                             opts = ( op, "vec" ) if vec else (op,)
 
-                        get_kernel(base, opts, major, minor)
+                        get_kernel(base, major, minor, opts)
+
 
 def main():
     gen_kernels()
+
 
 if __name__ == "__main__":
     main()

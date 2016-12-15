@@ -91,3 +91,5 @@ ENV/
 
 #test executable
 test
+
+bazel-*
