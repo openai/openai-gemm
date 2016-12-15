@@ -1,9 +1,9 @@
-#include "c_interface.h"
-
 #include <thrust/fill.h>
 #include <thrust/execution_policy.h>
 
 #include <vector>
+
+#include "include/c_interface.h"
 
 /* Simple program to call all possible kernel variants to make sure the are
    callable and produce sane results.  Not meant to check the correctness of
@@ -27,14 +27,15 @@ int main(void) {
     thrust::fill_n(thrust::device, B, size * size, 1.f);
 
     for (auto op : ops) {
-      int grid;
+      unsigned int grid;
       get_grid_limits('s', op.first, op.second, &grid);
       for (int g = 0; g < grid; ++g) {
-        int shared;
+        unsigned int shared;
         get_shared_limits('s', op.first, op.second, g, &shared);
         for (int s = 0; s < shared; ++s) {
-          openai_sgemm(A, B, C, op.first, op.second, size, size, size,
+          bool res = openai_sgemm(A, B, C, op.first, op.second, size, size, size,
                        size, size, size, 1.0, 0.0, NULL, g, s);
+          assert(res);
           cudaMemcpy(C_host, C, size * size * sizeof(float), cudaMemcpyDeviceToHost);
           
           assert(C_host[0] == 1024);
@@ -61,14 +62,15 @@ int main(void) {
     thrust::fill_n(thrust::device, B, size * size, 0x3c00);
 
     for (auto op : ops) {
-      int grid;
+      unsigned int grid;
       get_grid_limits('h', op.first, op.second, &grid);
       for (int g = 0; g < grid; ++g) {
-        int shared;
+        unsigned int shared;
         get_shared_limits('h', op.first, op.second, g, &shared);
         for (int s = 0; s < shared; ++s) {
-          openai_hgemm(A, B, C, op.first, op.second, size, size, size,
+          bool res = openai_hgemm(A, B, C, op.first, op.second, size, size, size,
                        size, size, size, 1.0, 0.0, NULL, g, s);
+          assert(res);
           cudaMemcpy(C_host, C, size * size * sizeof(uint16_t), cudaMemcpyDeviceToHost);
 
           assert(C_host[0] == 25600);
