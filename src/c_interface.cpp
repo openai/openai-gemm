@@ -1,11 +1,12 @@
-#include <vector>
-#include <string>
-#include <unordered_map>
+#include <algorithm>
 #include <iostream>
 #include <mutex>
-#include <tuple>
-
+#include <string>
 #include <stdint.h>
+#include <tuple>
+#include <vector>
+#include <unordered_map>
+
 
 typedef struct CUfunc_st *CUfunction;
 typedef struct CUmod_st *CUmodule;
@@ -127,13 +128,18 @@ std::tuple<int, int, int> getDeviceProperties(CUdevice& device) {
 }
 
 std::pair<int, int> closest_divisor(int val, int div) {
-  const std::vector<int> primes = {2, 3, 5, 7, 11, 13};
-  for (auto i : primes) {
-    if (val % i == 0) {
-      return std::make_pair(i, val / i);
-    }
+  if (div == 2) {
+    if ((val & 1) == 0) { return std::make_pair(2, val >> 1);  }
+    else                { return std::make_pair(1, val);       }
   }
-  return std::make_pair(1, val);
+  else if (div == 4) {
+    if      ((val & 3) == 0) { return std::make_pair(4, val >> 2); }
+    else if ((val % 3) == 0) { return std::make_pair(3, val / 3);  }
+    else if ((val % 5) == 0) { return std::make_pair(5, val / 5);  }
+    else if ((val & 1) == 0) { return std::make_pair(2, val >> 1); }
+    else if ((val % 7) == 0) { return std::make_pair(7, val / 7);  }
+    else                     { return std::make_pair(1, val);      }
+  }
 }
 
 std::string get_op_string(bool a_t, bool b_t) {
@@ -215,11 +221,11 @@ bool gemm(std::string precision, void *A, void *B, void *C,
   else
     return false;
 
-  if (kernels_.count(kernel_string) == 0) {
+  auto kernel = kernels_.find(kernel_string);
+  if (kernel == kernels_.end()) {
     loadKernels(major);
+    kernel = kernels_.find(kernel_string);
   }
-
-  CUfunction kernel = kernels_[kernel_string];
 
   int blk_A = (m + kp.tile_m - 1) / kp.tile_m;
   int blk_B = (n + kp.tile_n - 1) / kp.tile_n;
@@ -234,7 +240,7 @@ bool gemm(std::string precision, void *A, void *B, void *C,
   void *args[13] = {&C, &A, &B, &alpha, &beta, &lda, &ldb, &ldc,
                     &m, &n, &k, &blk_a, &blk_b};
 
-  res = cuLaunchKernel(kernel, blk_a * blk_b, blk_B, blk_A,
+  res = cuLaunchKernel(kernel->second, blk_a * blk_b, blk_B, blk_A,
                        kp.threads, 1, 1,
                        kp.shared_sizes[shared], stream, args, NULL);
 
