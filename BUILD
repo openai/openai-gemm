@@ -1,3 +1,5 @@
+package(default_visibility = ["//visibility:public"])
+
 cc_library(
     name = "openai_gemm",
     srcs = ["src/c_interface.cpp",
