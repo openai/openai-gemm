@@ -139,6 +139,9 @@ std::pair<int, int> closest_divisor(int val, int div) {
     else if ((val % 7) == 0) { return std::make_pair(7, val / 7);  }
     else                     { return std::make_pair(1, val);      }
   }
+  else {
+    return std::make_pair(1, val);
+  }
 }
 
 std::string get_op_string(bool a_t, bool b_t) {
