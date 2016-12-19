@@ -7,6 +7,7 @@ import subprocess
 import numpy as np
 import pycuda.driver as drv
 from operator import mul
+from struct import unpack_from
 from pycuda.tools import context_dependent_memoize
 from scikits.cuda import cublas
 
@@ -91,18 +92,22 @@ def matmul(A, B, C, alpha=1.0, beta=0.0, stream=None, bench=False):
 ####################################################################################################
 
 
-# scikits.cuda doesn't expose cublasSgemmEx
+# scikits.cuda doesn't expose cublasSgemmEx or cublasHgemm
 cublas._libcublas.cublasSgemmEx.restype  = int
 cublas._libcublas.cublasSgemmEx.argtypes = [
     cublas._types.handle,
-    ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
-    ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int, ctypes.c_int,
+    ctypes.c_int, ctypes.c_int,
+    ctypes.c_int, ctypes.c_int, ctypes.c_int,
+    ctypes.c_void_p,
     ctypes.c_void_p, ctypes.c_int, ctypes.c_int,
-    ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int, ctypes.c_int ]
+    ctypes.c_void_p, ctypes.c_int, ctypes.c_int,
+    ctypes.c_void_p,
+    ctypes.c_void_p, ctypes.c_int, ctypes.c_int ]
 
-def cublasHgemm(handle, transa, transb, m, n, k, alpha, A, lda, B, ldb, beta, C, ldc):
+def cublasSgemmEx(handle, transa, transb, m, n, k, alpha, A, lda, B, ldb, beta, C, ldc):
     status = cublas._libcublas.cublasSgemmEx(handle,
-        cublas._CUBLAS_OP[transa], cublas._CUBLAS_OP[transb], m, n, k,
+        cublas._CUBLAS_OP[transa], cublas._CUBLAS_OP[transb],
+        m, n, k,
         ctypes.byref(ctypes.c_float(alpha)),
         int(A), 2, lda,
         int(B), 2, ldb,
@@ -110,9 +115,38 @@ def cublasHgemm(handle, transa, transb, m, n, k, alpha, A, lda, B, ldb, beta, C,
         int(C), 2, ldc)
     cublas.cublasCheckStatus(status)
 
+cublas._libcublas.cublasHgemm.restype  = int
+cublas._libcublas.cublasHgemm.argtypes = [
+    cublas._types.handle,
+    ctypes.c_int, ctypes.c_int,
+    ctypes.c_int, ctypes.c_int, ctypes.c_int,
+    ctypes.c_void_p,
+    ctypes.c_void_p, ctypes.c_int,
+    ctypes.c_void_p, ctypes.c_int,
+    ctypes.c_void_p,
+    ctypes.c_void_p, ctypes.c_int ]
+
+h_dtype = np.dtype(np.float16)
+
+def cublasHgemm(handle, transa, transb, m, n, k, alpha, A, lda, B, ldb, beta, C, ldc):
+
+    alpha = unpack_from('H', h_dtype.type(alpha))[0]
+    beta  = unpack_from('H', h_dtype.type(beta))[0]
+
+    status = cublas._libcublas.cublasHgemm(handle,
+        cublas._CUBLAS_OP[transa], cublas._CUBLAS_OP[transb],
+        m, n, k,
+        ctypes.byref(ctypes.c_uint16(alpha)),
+        int(A), lda,
+        int(B), ldb,
+        ctypes.byref(ctypes.c_uint16(beta)),
+        int(C), ldc)
+    cublas.cublasCheckStatus(status)
+
 cublasXgemm = {
-    "s" : cublas.cublasSgemm,
-    "h" : cublasHgemm,
+    "s"  : cublas.cublasSgemm,
+    "h"  : cublasSgemmEx,
+    "h2" : cublasHgemm,
 }
 
 
@@ -120,6 +154,14 @@ cublasXgemm = {
 def _get_sm_count():
     attributes = drv.Context.get_device().get_attributes()
     return attributes[drv.device_attribute.MULTIPROCESSOR_COUNT]
+
+@context_dependent_memoize
+def _get_compute_capability():
+
+    attributes = drv.Context.get_device().get_attributes()
+    major = attributes[drv.device_attribute.COMPUTE_CAPABILITY_MAJOR]
+    minor = attributes[drv.device_attribute.COMPUTE_CAPABILITY_MINOR]
+    return major, minor
 
 @context_dependent_memoize
 def _get_events():
@@ -274,12 +316,18 @@ def _get_gemm_kernel(prefix, op, cda, cdb, cdc, m, n, k):
             timings.append((msecs, gflops, kernel, params, dynamic_shared))
             cache.append((msecs, gflops, kernel.name, dynamic_shared))
 
+    major, minor = _get_compute_capability()
+    if prefix == "h" and major == 6 and minor == 0:
+        cublas_gemm = cublasXgemm["h2"]
+    else:
+        cublas_gemm = cublasXgemm[prefix]
+
     # record a cublas time for reference
     cublas_handle = _get_cublas()
     start.record()
     for r in range(repeat):
         # convert row order to col order
-        cublasXgemm[prefix](cublas_handle, op[1], op[0], n, m, k, 1.0, B, cdb, A, cda, 0.0, C, cdc)
+        cublas_gemm(cublas_handle, op[1], op[0], n, m, k, 1.0, B, cdb, A, cda, 0.0, C, cdc)
     end.record()
     end.synchronize()
     msecs = end.time_since(start) / float(repeat)
@@ -577,16 +625,15 @@ def run_command(cmdlist):
         if out: print out
         if err: print err
 
+
 @context_dependent_memoize
 def get_kernel(base_name, options=None):
 
-    attributes = drv.Context.get_device().get_attributes()
-    major = attributes[drv.device_attribute.COMPUTE_CAPABILITY_MAJOR]
-    minor = attributes[drv.device_attribute.COMPUTE_CAPABILITY_MINOR]
+    major, minor = _get_compute_capability()
     if major < 5:
         raise RuntimeError("sass kernels require Maxwell or greater class hardware")
 
-    arch = "sm_%d%d" % (major, minor)
+    arch  = "sm_%d%d" % (major, minor)
 
     libprefix = "PERL5LIB=%s" % maxas_dir
     maxas_i = [libprefix, os.path.join(maxas_dir, "maxas.pl") + " -i -w"]
