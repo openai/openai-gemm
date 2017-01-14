@@ -1121,6 +1121,11 @@ LOOP:
 --:-:-:-:5      BAR.SYNC 0;
 
 <SCHEDULE_BLOCK>
+--:-:-:-:1      IADD cy00, cy00, 16;
+--:-:-:-:1      IADD cy04, cy04, 16;
+--:-:-:-:1      IADD cy08, cy08, 16;
+--:-:-:-:1      IADD cy12, cy12, 16;
+
 --:-:-:-:1      ISETP.LT.AND P0, PT, cy00, param_m, P5; // cy00 < m && cx < n && beta != 0
 --:-:-:-:1      ISETP.LT.AND P1, PT, cy04, param_m, P5; // cy04 < m && cx < n && beta != 0
 --:-:-:-:1      ISETP.LT.AND P2, PT, cy08, param_m, P5; // cy08 < m && cx < n && beta != 0
@@ -1168,10 +1173,6 @@ LOOP:
 --:-:-:-:1      FMUL shuffle_x6y7, cx6y7, alpha;
 --:-:-:-:1      FMUL shuffle_x7y7, cx7y7, alpha;
 </ORDERED>
---:-:-:-:1      IADD cy00, cy00, 16;
---:-:-:-:1      IADD cy04, cy04, 16;
---:-:-:-:1      IADD cy08, cy08, 16;
---:-:-:-:1      IADD cy12, cy12, 16;
 
 --:-:-:-:1      STS.128 [writeCs+4x<0*256 + 00>], shuffle_x0y4;
 --:-:-:-:1      STS.128 [writeCs+4x<0*256 + 16>], shuffle_x4y4;
