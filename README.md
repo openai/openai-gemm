@@ -1,3 +1,5 @@
+**Status:** Archive (code is provided as-is, no updates expected)
+
 # openai-gemm
 Open single and half precision gemm implementations.  The main speedups over cublas are with small minibatch and in fp16 data formats.
 
